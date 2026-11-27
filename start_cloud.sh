@@ -42,13 +42,26 @@ if [ ! -d "/app/pgame/Run" ]; then
   ln -sfn client /app/pgame/Client
   chmod +x /app/pgame/Run/*/run.sh
   python3 -c '
-import re
+import re, os
 p = "/app/pgame/Run/ServiceConfig.xml"
 s = open(p, encoding="utf-8").read()
 s = re.sub(r"<e ServiceClass=\"StaticResService\"[\s\S]*?</e>", "", s)
 open(p, "w", encoding="utf-8").write(s)
+delays = {
+    "DataStorageService": 0,
+    "AgentService": 4,
+    "ManagementService": 8,
+    "PokemonGameService": 12,
+    "AuthenticationService": 20,
+}
+for svc, d in delays.items():
+    rp = f"/app/pgame/Run/{svc}/run.sh"
+    sl = f"sleep {d}\n" if d > 0 else ""
+    sh = f"#!/bin/sh\n{sl}exec mono \"{svc}.exe\" \"$@\" >> \"/tmp/{svc}.log\" 2>&1\n"
+    open(rp, "wb").write(sh.encode("utf-8"))
+    os.chmod(rp, 0o755)
 '
-  echo "Bundle extracted & optimized for 512MB RAM."
+  echo "Bundle extracted & staggered for 0.15 CPU / 512MB RAM."
 fi
 
 echo "=== [2/5] Starting MariaDB (512MB-tuned, non-root UID $(id -u)) ==="
@@ -114,7 +127,7 @@ rm -f /tmp/lsc.log /tmp/*Service.log 2>/dev/null || true
 cd /app/pgame/Run
 xvfb-run -a mono LocalServiceContainer.exe Pokemon >/tmp/lsc.log 2>&1 &
 
-for i in $(seq 1 45); do
+for i in $(seq 1 180); do
   if curl -sS -m 2 http://127.0.0.1:18000/login/servers >/dev/null 2>&1 && \
      ss -lnt 2>/dev/null | grep -q ":18001 " && \
      ss -lnt 2>/dev/null | grep -q ":18002 "; then
