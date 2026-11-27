@@ -156,6 +156,174 @@ def gm_login_and_recharge(sid, pid, goodsid, money, diamond):
     return res
 
 
+def gm_send_mail(sid, pid, title, detail, items_str):
+    session = "sepay-auto-session-pkm-2026"
+    res = {}
+    for attempt in range(2):
+        payload = urllib.parse.urlencode({
+            "sid": sid,
+            "pid": pid,
+            "title": title,
+            "detail": detail,
+            "items": items_str,
+            "session": session,
+        }).encode("utf-8")
+        req = urllib.request.Request("http://127.0.0.1:18002/mail/add", data=payload, method="POST")
+        with urllib.request.urlopen(req, timeout=10) as r:
+            res = json.loads(r.read().decode("utf-8"))
+        if res.get("status") == 0 and res.get("result"):
+            return res
+        if attempt == 0:
+            ensure_gm_session()
+    return res
+
+
+FC7_LOCK = threading.Lock()
+FC7_TABLE_READY = False
+FC7_CHOICES = {1243: "Raikou", 1244: "Entei", 1245: "Suicune"}
+FC7_REWARDS = {
+    1: ("Quà Nạp Đầu - Ngày 1", "Chúc mừng bạn nhận Quà Nạp Lần Đầu Ngày 1!", "10507;1|2;10000|1;500000"),
+    2: ("Quà Nạp Đầu - Ngày 2", "Chúc mừng bạn nhận Quà Nạp Lần Đầu Ngày 2!", "10131;3|13002;10|2151;10"),
+    3: ("Quà Nạp Đầu - Ngày 3", "Chúc mừng bạn nhận Quà Nạp Lần Đầu Ngày 3!", "10013;20|12003;50|10309;3"),
+    4: ("Quà Nạp Đầu - Ngày 4", "Chúc mừng bạn nhận Quà Nạp Lần Đầu Ngày 4!", "12151;40|12152;20|10166;1"),
+    5: ("Quà Nạp Đầu - Ngày 5", "Chúc mừng bạn nhận Quà Nạp Lần Đầu Ngày 5!", "12111;50|12201;20|10169;1"),
+    6: ("Quà Nạp Đầu - Ngày 6", "Chúc mừng bạn nhận Quà Nạp Lần Đầu Ngày 6!", "10089;30|10090;50|2150;10"),
+    7: ("Quà Nạp Đầu - Ngày 7", "Chúc mừng bạn nhận Quà Nạp Lần Đầu Ngày 7 + Thần Thú tự chọn!", "13003;3|12111;100|13013;2"),
+}
+
+
+def _mysql_query(sql):
+    p = subprocess.run(
+        ["mysql", f"--socket={MYSQL_SOCK}", "-u", "root", "-pqweqwe", "-D", "pokemon", "-N", "-B", "-e", sql],
+        capture_output=True, text=True, timeout=8
+    )
+    return p.returncode, p.stdout.strip()
+
+
+def fc7_ensure_table():
+    global FC7_TABLE_READY
+    if FC7_TABLE_READY:
+        return
+    sql = (
+        "CREATE TABLE IF NOT EXISTS t_first_charge_7d ("
+        "pid INT PRIMARY KEY,"
+        "first_charge_ts BIGINT NOT NULL DEFAULT 0,"
+        "claimed_days VARCHAR(64) NOT NULL DEFAULT '',"
+        "day7_choice INT NOT NULL DEFAULT 0,"
+        "updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP"
+        ");"
+    )
+    rc, _ = _mysql_query(sql)
+    if rc == 0:
+        FC7_TABLE_READY = True
+
+
+def fc7_record_first_charge(pid, ts=None):
+    pid = int(pid)
+    if pid <= 0:
+        return
+    now_ts = int(ts or time.time())
+    with FC7_LOCK:
+        fc7_ensure_table()
+        _mysql_query(
+            f"INSERT INTO t_first_charge_7d(pid, first_charge_ts, claimed_days, day7_choice) "
+            f"VALUES ({pid}, {now_ts}, '', 0) "
+            f"ON DUPLICATE KEY UPDATE first_charge_ts = IF(first_charge_ts=0, {now_ts}, first_charge_ts);"
+        )
+
+
+def _vn_day_num(ts):
+    return int((int(ts) + 7 * 3600) // 86400)
+
+
+def fc7_get_status(pid):
+    pid = int(pid)
+    if pid <= 0:
+        return {"status": 0, "recharged": False, "unlocked_day": 0, "claimed_days": [], "day7_choice": 0}
+    with FC7_LOCK:
+        fc7_ensure_table()
+        rc, out = _mysql_query(f"SELECT first_charge_ts, claimed_days, day7_choice FROM t_first_charge_7d WHERE pid={pid};")
+        first_ts = 0
+        claimed = []
+        choice = 0
+        if rc == 0 and out:
+            parts = out.splitlines()[0].split("\t")
+            first_ts = int(parts[0] or 0)
+            claimed = [int(x) for x in (parts[1] if len(parts) > 1 else "").split(",") if x.strip().isdigit()]
+            choice = int(parts[2] or 0) if len(parts) > 2 else 0
+
+        if first_ts == 0:
+            # Check approved orders in pay_orders.json
+            orders = load_orders()
+            for o in orders:
+                if o.get("status") == "approved" and int(o.get("pid", 0)) == pid:
+                    first_ts = int(o.get("ts") or time.time())
+                    break
+            # Also check if player has real recharge > initial VIP 9 (2688) in DB
+            if first_ts == 0:
+                rc2, out2 = _mysql_query(f"SELECT COALESCE(MAX(recharge),0) FROM t_player WHERE pid={pid};")
+                if rc2 == 0 and out2.strip().isdigit() and int(out2.strip()) > 2688:
+                    first_ts = int(time.time())
+            if first_ts > 0:
+                _mysql_query(
+                    f"INSERT INTO t_first_charge_7d(pid, first_charge_ts, claimed_days, day7_choice) "
+                    f"VALUES ({pid}, {first_ts}, '', 0) ON DUPLICATE KEY UPDATE first_charge_ts={first_ts};"
+                )
+
+    if first_ts <= 0:
+        return {"status": 0, "recharged": False, "first_charge_ts": 0, "unlocked_day": 0, "claimed_days": [], "day7_choice": 0}
+    unlocked = min(7, max(1, 1 + (_vn_day_num(time.time()) - _vn_day_num(first_ts))))
+    return {
+        "status": 0,
+        "recharged": True,
+        "first_charge_ts": first_ts,
+        "unlocked_day": unlocked,
+        "claimed_days": sorted(set(claimed)),
+        "day7_choice": choice,
+    }
+
+
+def fc7_claim_day(pid, day, choice=0):
+    pid = int(pid)
+    day = int(day)
+    choice = int(choice or 0)
+    if pid <= 0 or day not in FC7_REWARDS:
+        return {"status": -1, "message": "Dữ liệu không hợp lệ"}
+    if day == 7 and choice not in FC7_CHOICES:
+        return {"status": -1, "message": "Vui lòng chọn 1 Thần Thú (Raikou / Entei / Suicune)!"}
+
+    st = fc7_get_status(pid)
+    if not st["recharged"]:
+        return {"status": -1, "message": "Bạn cần nạp lần đầu (từ 20.000đ) để mở khóa quà 7 ngày!"}
+    if day > st["unlocked_day"]:
+        return {"status": -1, "message": f"Quà Ngày {day} chưa mở khóa (hiện tại mới mở đến Ngày {st['unlocked_day']})!"}
+    if day in st["claimed_days"]:
+        return {"status": -1, "message": f"Bạn đã nhận quà Ngày {day} rồi!"}
+
+    title, detail, items_str = FC7_REWARDS[day]
+    if day == 7:
+        items_str = f"{items_str}|{choice};1"
+        detail = f"Chúc mừng bạn nhận Quà Nạp Lần Đầu Ngày 7 + Thần Thú {FC7_CHOICES[choice]}!"
+
+    res = gm_send_mail(1, pid, title, detail, items_str)
+    if not (res.get("status") == 0 and res.get("result")):
+        return {"status": -1, "message": f"Lỗi gửi thư quà: {res}"}
+
+    new_claimed = sorted(set(st["claimed_days"] + [day]))
+    claimed_str = ",".join(str(x) for x in new_claimed)
+    with FC7_LOCK:
+        fc7_ensure_table()
+        ch_sql = f", day7_choice={choice}" if day == 7 else ""
+        _mysql_query(f"UPDATE t_first_charge_7d SET claimed_days='{claimed_str}'{ch_sql} WHERE pid={pid};")
+
+    return {
+        "status": 0,
+        "claimed_days": new_claimed,
+        "day7_choice": choice if day == 7 else st["day7_choice"],
+        "message": f"Đã gửi quà Ngày {day} vào Hòm Thư trong game!",
+    }
+
+
 def process_sepay_transaction(tx_id, pid, goodsid, amount_vnd, content, source="SePay"):
     tx_id = str(tx_id)
     with ORDERS_LOCK:
@@ -224,6 +392,10 @@ def process_sepay_transaction(tx_id, pid, goodsid, amount_vnd, content, source="
                     "status": "approved",
                 })
             save_json(ORDERS_FILE, orders)
+        try:
+            fc7_record_first_charge(pid)
+        except Exception:
+            pass
         return {"status": 0, "auto_credited": True}
     return {"status": -1, "message": str(res)}
 
@@ -266,14 +438,20 @@ def poll_apps_script_loop():
 
 def keep_services_warm_loop():
     time.sleep(5)
+    tick = 0
+    ext_url = os.environ.get("RENDER_EXTERNAL_URL", "https://pixel-pokemon-cloud.onrender.com").rstrip("/") + "/pay/ping"
     while True:
-        for url in (
+        urls = [
             "http://127.0.0.1:18000/login/servers",
             f"http://127.0.0.1:{LISTEN_PORT}/pay/ping",
-        ):
+        ]
+        if tick % 12 == 11:
+            urls.append(ext_url)
+        tick += 1
+        for url in urls:
             try:
-                req = urllib.request.Request(url, headers={"Connection": "close"})
-                with urllib.request.urlopen(req, timeout=5) as r:
+                req = urllib.request.Request(url, headers={"Connection": "close", "User-Agent": "PKM-KeepAlive/1.0"})
+                with urllib.request.urlopen(req, timeout=8) as r:
                     r.read(256)
             except Exception:
                 pass
@@ -542,6 +720,20 @@ class UnifiedProxyHandler(http.server.BaseHTTPRequestHandler):
                 self._send_json(200, {"status": 0})
                 return True
 
+        if path == "/pay/fc7_status" and self.command == "GET":
+            pid = int((qs.get("pid") or ["0"])[0])
+            self._send_json(200, fc7_get_status(pid))
+            return True
+
+        if path == "/pay/fc7_claim" and self.command == "POST":
+            try:
+                data = json.loads((body or b"{}").decode("utf-8"))
+                out = fc7_claim_day(data.get("pid", 0), data.get("day", 0), data.get("choice", 0))
+                self._send_json(200, out)
+            except Exception as e:
+                self._send_json(500, {"status": -1, "message": str(e)})
+            return True
+
         if path == "/pay/check_status" and self.command == "GET":
             pid = int((qs.get("pid") or ["0"])[0])
             goodsid = int((qs.get("goodsid") or ["0"])[0])
@@ -613,6 +805,10 @@ class UnifiedProxyHandler(http.server.BaseHTTPRequestHandler):
                     target["status"] = "approved"
                     target["ts"] = int(time.time())
                     save_orders(orders)
+                    try:
+                        fc7_record_first_charge(target["pid"])
+                    except Exception:
+                        pass
                     self._send_json(200, {"status": 0})
                 else:
                     self._send_json(500, {"status": -1, "message": str(res)})
@@ -648,6 +844,10 @@ class UnifiedProxyHandler(http.server.BaseHTTPRequestHandler):
                         "note": "MANUAL_ADMIN", "status": "approved",
                     })
                     save_orders(orders)
+                    try:
+                        fc7_record_first_charge(pid)
+                    except Exception:
+                        pass
                     self._send_json(200, {"status": 0})
                 else:
                     self._send_json(500, {"status": -1, "message": str(res)})

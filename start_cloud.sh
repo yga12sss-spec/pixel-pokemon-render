@@ -1,5 +1,5 @@
 #!/bin/bash
-# BUNDLE_VER=vn23
+# BUNDLE_VER=vn24
 set -e
 
 export LANG=C.UTF-8
