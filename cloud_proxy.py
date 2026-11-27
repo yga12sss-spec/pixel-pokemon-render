@@ -63,6 +63,17 @@ MIME_MAP = {
 
 COMPRESSIBLE_EXTS = {".html", ".htm", ".js", ".json", ".css", ".xml", ".csv", ".txt", ".svg", ".fnt", ".exml"}
 
+VND_BY_ID = {
+    1: 20000, 2: 60000, 3: 100000, 4: 150000,
+    5: 200000, 6: 500000, 7: 1000000, 8: 2000000,
+    9: 50000, 10: 100000,
+}
+
+
+def get_expected_vnd(goodsid, rmb):
+    return VND_BY_ID.get(int(goodsid), max(20000, int(rmb * VND_PER_YUAN)))
+
+
 PACK_TABLE = {
     1: (6, 66), 2: (30, 330), 3: (50, 550), 4: (100, 1100),
     5: (200, 2200), 6: (500, 6000), 7: (1000, 13000), 8: (2000, 27000),
@@ -153,7 +164,7 @@ def process_sepay_transaction(tx_id, pid, goodsid, amount_vnd, content, source="
             return {"status": 0, "duplicate": True}
 
     rmb, diamond = PACK_TABLE.get(int(goodsid), (6, 66))
-    expected_vnd = max(20000, int(rmb * VND_PER_YUAN))
+    expected_vnd = get_expected_vnd(goodsid, rmb)
 
     if int(amount_vnd) < expected_vnd:
         with ORDERS_LOCK:
@@ -315,18 +326,18 @@ ADMIN_HTML = r"""<!DOCTYPE html>
     <div class="row">
       <input id="m_pid" type="number" placeholder="UID (VD: 47)" style="width:120px;">
       <select id="m_gid">
-        <option value="1">Gói 1 - 6 Tệ (20.000đ - Nạp Đầu)</option>
-        <option value="2">Gói 2 - 30 Tệ (30.000đ)</option>
-        <option value="3">Gói 3 - 50 Tệ (50.000đ)</option>
-        <option value="4">Gói 4 - 100 Tệ (100.000đ)</option>
-        <option value="5">Gói 5 - 200 Tệ (200.000đ)</option>
-        <option value="6">Gói 6 - 500 Tệ (500.000đ)</option>
-        <option value="7">Gói 7 - 1000 Tệ (1.000.000đ)</option>
-        <option value="8">Gói 8 - 2000 Tệ (2.000.000đ)</option>
-        <option value="9">Gói 9 - Thẻ Tháng (30.000đ)</option>
-        <option value="10">Gói 10 - Thẻ Vĩnh Viễn (98.000đ)</option>
+        <option value="1">Gói 1 - 3.300 KC (20.000đ - Nạp Đầu)</option>
+        <option value="2">Gói 2 - 16.500 KC (60.000đ)</option>
+        <option value="3">Gói 3 - 27.500 KC (100.000đ)</option>
+        <option value="4">Gói 4 - 55.000 KC (150.000đ)</option>
+        <option value="5">Gói 5 - 110.000 KC (200.000đ)</option>
+        <option value="6">Gói 6 - 300.000 KC (500.000đ)</option>
+        <option value="7">Gói 7 - 650.000 KC (1.000.000đ)</option>
+        <option value="8">Gói 8 - 1.350.000 KC (2.000.000đ)</option>
+        <option value="9">Gói 9 - Thẻ Tháng (50.000đ)</option>
+        <option value="10">Gói 10 - Thẻ Vĩnh Viễn (100.000đ)</option>
         <option value="11">Gói 11 - Gói Ưu Đãi (20.000đ)</option>
-        <option value="13">Gói 13 - Quà 49 Tệ (49.000đ)</option>
+        <option value="13">Gói 13 - Quà Đặc Biệt (49.000đ)</option>
       </select>
       <button class="btn-pri" onclick="manualTopup()">Cộng thẳng vào Nick</button>
       <span id="m_msg" style="font-size:13px;"></span>
@@ -633,7 +644,7 @@ class UnifiedProxyHandler(http.server.BaseHTTPRequestHandler):
                         "id": new_id, "ts": int(time.time()), "time": time.strftime("%Y-%m-%d %H:%M:%S"),
                         "sid": 1, "pid": pid, "playerName": f"UID:{pid} (Admin Buff)",
                         "goodsid": gid, "goodsName": f"Gói #{gid} ({rmb} Tệ)",
-                        "rmb": rmb, "diamond": dia, "vnd": max(20000, rmb * VND_PER_YUAN),
+                        "rmb": rmb, "diamond": dia, "vnd": get_expected_vnd(gid, rmb),
                         "note": "MANUAL_ADMIN", "status": "approved",
                     })
                     save_orders(orders)
