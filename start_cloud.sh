@@ -11,6 +11,9 @@ export PKM_READY_FILE=/tmp/pkm/ready
 export PORT="${PORT:-10000}"
 
 mkdir -p /home/user/mysqldata /home/user/data /tmp/pkm
+echo '=== [0/5] Setup 512MB swap to prevent OOM ==='
+dd if=/dev/zero of=/tmp/swapfile bs=1M count=512 2>/dev/null && chmod 600 /tmp/swapfile && mkswap /tmp/swapfile 2>/dev/null && swapon /tmp/swapfile 2>/dev/null && echo 'Swap OK' || echo 'Swap failed'
+
 rm -f "$PKM_READY_FILE"
 
 on_shutdown() {
