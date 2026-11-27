@@ -1,0 +1,11 @@
+services:
+  - type: web
+    name: pixel-pokemon-render
+    runtime: docker
+    plan: free
+    healthCheckPath: /pay/ping
+    envVars:
+      - key: HF_TOKEN
+        sync: false
+      - key: HF_BACKUP_REPO
+        value: yvippro11/pixel-pokemon-db-backup
