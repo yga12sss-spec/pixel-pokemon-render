@@ -58,7 +58,7 @@ mariadbd \
   --character-set-server=utf8mb4 \
   --collation-server=utf8mb4_general_ci \
   --skip-character-set-client-handshake \
-  --innodb-buffer-pool-size=8M \
+  --innodb-buffer-pool-size=4M \
   --innodb-log-buffer-size=1M \
   --key-buffer-size=256K \
   --aria-pagecache-buffer-size=512K \
@@ -68,7 +68,14 @@ mariadbd \
   --table-open-cache=32 \
   --table-definition-cache=128 \
   --thread-cache-size=4 \
-  --max-connections=20 \
+  --max-connections=10 \
+  --skip-innodb-adaptive-hash-index \
+  --innodb-read-io-threads=1 \
+  --innodb-write-io-threads=1 \
+  --innodb-purge-threads=1 \
+  --innodb-change-buffer-max-size=0 \
+  --query-cache-size=0 \
+  --query-cache-type=0 \
   >/tmp/pkm/mariadbd.log 2>&1 &
 
 for i in $(seq 1 30); do
