@@ -11,8 +11,6 @@ export PKM_READY_FILE=/tmp/pkm/ready
 export PORT="${PORT:-10000}"
 
 mkdir -p /home/user/mysqldata /home/user/data /tmp/pkm
-echo '=== [0/5] Setup 512MB swap to prevent OOM ==='
-dd if=/dev/zero of=/tmp/swapfile bs=1M count=512 2>/dev/null && chmod 600 /tmp/swapfile && mkswap /tmp/swapfile 2>/dev/null && swapon /tmp/swapfile 2>/dev/null && echo 'Swap OK' || echo 'Swap failed'
 
 rm -f "$PKM_READY_FILE"
 
@@ -28,6 +26,9 @@ trap on_shutdown SIGTERM SIGINT
 echo "=== [0/5] Starting Unified Proxy on 0.0.0.0:${PORT} (instant health check) ==="
 python3 /app/cloud_proxy.py &
 PROXY_PID=$!
+# Setup swap in background so proxy health-check is not blocked
+(dd if=/dev/zero of=/tmp/swapfile bs=1M count=256 2>/dev/null && chmod 600 /tmp/swapfile && mkswap /tmp/swapfile 2>/dev/null && swapon /tmp/swapfile 2>/dev/null && echo 'Swap 256MB OK' || echo 'Swap skipped') &
+
 
 echo "=== [1/5] Downloading private game bundle (if not present) ==="
 if [ ! -d "/app/pgame/Run" ]; then
