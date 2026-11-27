@@ -11,7 +11,6 @@ export PKM_READY_FILE=/tmp/pkm/ready
 export PORT="${PORT:-10000}"
 
 mkdir -p /home/user/mysqldata /home/user/data /tmp/pkm
-
 rm -f "$PKM_READY_FILE"
 
 on_shutdown() {
@@ -26,9 +25,6 @@ trap on_shutdown SIGTERM SIGINT
 echo "=== [0/5] Starting Unified Proxy on 0.0.0.0:${PORT} (instant health check) ==="
 python3 /app/cloud_proxy.py &
 PROXY_PID=$!
-# Setup swap in background so proxy health-check is not blocked
-(dd if=/dev/zero of=/tmp/swapfile bs=1M count=256 2>/dev/null && chmod 600 /tmp/swapfile && mkswap /tmp/swapfile 2>/dev/null && swapon /tmp/swapfile 2>/dev/null && echo 'Swap 256MB OK' || echo 'Swap skipped') &
-
 
 echo "=== [1/5] Downloading private game bundle (if not present) ==="
 if [ ! -d "/app/pgame/Run" ]; then
@@ -37,12 +33,10 @@ if [ ! -d "/app/pgame/Run" ]; then
     sleep 3600
     exit 1
   fi
-  echo "Fetching pgame_bundle.tar.gz from private repo ${HF_BACKUP_REPO}..."
+  echo "Streaming pgame_bundle.tar.gz from private repo ${HF_BACKUP_REPO} (zero /tmp RAM usage)..."
   curl -fL --retry 3 -H "Authorization: Bearer ${HF_TOKEN}" \
     "https://huggingface.co/datasets/${HF_BACKUP_REPO}/resolve/main/pgame_bundle.tar.gz" \
-    -o /tmp/pgame_bundle.tar.gz
-  tar -xzf /tmp/pgame_bundle.tar.gz -C /app
-  rm -f /tmp/pgame_bundle.tar.gz
+    | tar -xz -C /app
   ln -sfn client /app/pgame/Client
   echo "Bundle extracted."
 fi
@@ -62,7 +56,7 @@ mariadbd \
   --character-set-server=utf8mb4 \
   --collation-server=utf8mb4_general_ci \
   --skip-character-set-client-handshake \
-  --innodb-buffer-pool-size=4M \
+  --innodb-buffer-pool-size=8M \
   --innodb-log-buffer-size=1M \
   --key-buffer-size=256K \
   --aria-pagecache-buffer-size=512K \
@@ -72,14 +66,7 @@ mariadbd \
   --table-open-cache=32 \
   --table-definition-cache=128 \
   --thread-cache-size=4 \
-  --max-connections=10 \
-  --skip-innodb-adaptive-hash-index \
-  --innodb-read-io-threads=1 \
-  --innodb-write-io-threads=1 \
-  --innodb-purge-threads=1 \
-  --innodb-change-buffer-max-size=0 \
-  --query-cache-size=0 \
-  --query-cache-type=0 \
+  --max-connections=20 \
   >/tmp/pkm/mariadbd.log 2>&1 &
 
 for i in $(seq 1 30); do
@@ -118,9 +105,10 @@ if [ "${TABLE_CNT:-0}" -lt 5 ]; then
   mysql --socket=/tmp/mysqld.sock -u root -pqweqwe pokemon -e "ALTER DATABASE pokemon CHARACTER SET utf8mb4 COLLATE utf8mb4_general_ci;"
   echo "Database import complete."
 fi
+rm -f /tmp/restored_pokemon.sql 2>/dev/null || true
 
 echo "=== [4/5] Compiling & Launching HeadlessServiceManager (zero WinForms/Xvfb, saves 120MB RAM) ==="
-export MONO_GC_PARAMS="nursery-size=512k,soft-heap-limit=120m"
+export MONO_GC_PARAMS="nursery-size=1m,soft-heap-limit=180m"
 rm -f /tmp/lsc.log /tmp/*Service.log 2>/dev/null || true
 cd /app/pgame/Run
 mcs -r:EasyGame.Core.dll -r:LocalServiceContainer.exe -r:ServiceManage.Interface.dll -r:System.Xml.dll -r:System.Core.dll -out:HeadlessContainer.exe /app/HeadlessContainer.cs >>/tmp/lsc.log 2>&1

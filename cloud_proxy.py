@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
+import gzip
 import http.client
 import http.server
 import json
@@ -27,6 +28,8 @@ PROCESSED_FILE = os.path.join(DATA_DIR, "sepay_processed.json")
 GAS_CODE_FILE = "/app/pgame/SePay_Code.gs"
 
 ORDERS_LOCK = threading.Lock()
+GZIP_CACHE_LOCK = threading.Lock()
+GZIP_CACHE = {}
 
 VND_PER_YUAN = 1000
 SEPAY_SECRET = "PKM_SEPAY_2026"
@@ -357,6 +360,26 @@ loadConfig();loadOrders();setInterval(loadOrders,4000);
 """
 
 
+_BACKEND_READY = False
+
+def is_backend_ready():
+    global _BACKEND_READY
+    if _BACKEND_READY:
+        return True
+    ready_file = os.environ.get("PKM_READY_FILE", "")
+    if ready_file and os.path.exists(ready_file):
+        _BACKEND_READY = True
+        return True
+    try:
+        for pt in (18000, 18001, 18002):
+            with socket.create_connection(("127.0.0.1", pt), timeout=0.5):
+                pass
+        _BACKEND_READY = True
+        return True
+    except Exception:
+        return False
+
+
 class UnifiedProxyHandler(http.server.BaseHTTPRequestHandler):
     protocol_version = "HTTP/1.1"
     timeout = 75
@@ -429,11 +452,7 @@ class UnifiedProxyHandler(http.server.BaseHTTPRequestHandler):
                         self.wfile.write(chunk)
                     return True
 
-            # NOTE: Render CDN handles compression (brotli/gzip) automatically.
-            # We must NOT compress here - double encoding causes garbled display.
-            with open(full_path, "rb") as f:
-                raw_bytes = f.read()
-
+            # Stream static file in 64KB chunks (zero RAM spike, Render Cloudflare CDN handles Brotli/Gzip)
             self.send_response(200)
             self.send_header("Content-Type", ctype)
             self.send_header("ETag", etag)
@@ -444,10 +463,15 @@ class UnifiedProxyHandler(http.server.BaseHTTPRequestHandler):
             self.send_header("Accept-Ranges", "bytes")
             self.send_header("Access-Control-Allow-Origin", "*")
             self.send_header("Connection", "close")
-            self.send_header("Content-Length", str(len(raw_bytes)))
+            self.send_header("Content-Length", str(st.st_size))
             self.end_headers()
             if self.command != "HEAD":
-                self.wfile.write(raw_bytes)
+                with open(full_path, "rb") as f:
+                    while True:
+                        buf = f.read(65536)
+                        if not buf:
+                            break
+                        self.wfile.write(buf)
             return True
         except Exception:
             return False
@@ -458,7 +482,20 @@ class UnifiedProxyHandler(http.server.BaseHTTPRequestHandler):
         qs = urllib.parse.parse_qs(parsed_url.query)
 
         if path == "/pay/ping":
-            self._send_json(200, {"status": 0, "ok": True, "ts": int(time.time())})
+            self._send_json(200, {"status": 0, "ok": True, "ready": is_backend_ready(), "ts": int(time.time())})
+            return True
+
+        if path == "/pay/diag" and (qs.get("key") or [""])[0] == SEPAY_SECRET:
+            import glob
+            ports = subprocess.run(["ss", "-lnt"], capture_output=True, text=True).stdout
+            procs = subprocess.run(["ps", "-eo", "pid,rss,cmd"], capture_output=True, text=True).stdout
+            logs = {}
+            for lf in sorted(glob.glob("/tmp/*.log")):
+                try:
+                    logs[os.path.basename(lf)] = open(lf, encoding="utf-8", errors="ignore").read()[-1800:]
+                except Exception:
+                    pass
+            self._send_json(200, {"ready": is_backend_ready(), "ports": ports, "procs": procs, "logs": logs})
             return True
 
         if path == "/pay/admin" and self.command == "GET":
@@ -639,8 +676,7 @@ class UnifiedProxyHandler(http.server.BaseHTTPRequestHandler):
         parsed = urllib.parse.urlparse(self.path)
         p = parsed.path
 
-        ready_file = os.environ.get("PKM_READY_FILE", "")
-        if ready_file and not os.path.exists(ready_file) and p != "/pay/ping":
+        if not is_backend_ready() and not p.startswith("/pay/"):
             boot_html = (
                 "<!DOCTYPE html><html lang='vi'><head><meta charset='utf-8'>"
                 "<meta name='viewport' content='width=device-width,initial-scale=1'>"
@@ -693,6 +729,12 @@ class UnifiedProxyHandler(http.server.BaseHTTPRequestHandler):
             if "/gm" in ref and self._serve_file_from_root(GM_ROOT, p):
                 return
             if self._serve_file_from_root(CLIENT_ROOT, p):
+                return
+            if (
+                p.startswith(("/resource/", "/icon/", "/assets/", "/ui/", "/anim/", "/langs/", "/sound/", "/particle/", "/bones/", "/js/", "/css/"))
+                or os.path.splitext(p)[1].lower() in (".png", ".jpg", ".jpeg", ".gif", ".webp", ".json", ".js", ".css", ".mp3", ".wav", ".fnt", ".exml", ".ico")
+            ):
+                self._send_json(404, {"error": "Not Found", "path": p})
                 return
 
         target_host, target_port, target_path = self._route(self.path)
@@ -769,10 +811,23 @@ class ThreadedHTTPServer(socketserver.ThreadingMixIn, http.server.HTTPServer):
     request_queue_size = 512
 
 
+def backup_periodic_loop():
+    time.sleep(90)
+    interval = int(os.environ.get("BACKUP_INTERVAL_SEC", "300"))
+    while True:
+        try:
+            if is_backend_ready():
+                subprocess.run(["python3", "/app/backup_sync.py", "once"], timeout=90)
+        except Exception as e:
+            print(f"[backup] periodic err: {e}", flush=True)
+        time.sleep(interval)
+
+
 if __name__ == "__main__":
     print(f"Starting Unified Cloud Proxy on 0.0.0.0:{LISTEN_PORT} ...", flush=True)
     threading.Thread(target=poll_apps_script_loop, daemon=True).start()
     threading.Thread(target=keep_services_warm_loop, daemon=True).start()
+    threading.Thread(target=backup_periodic_loop, daemon=True).start()
     while True:
         try:
             srv = ThreadedHTTPServer(("0.0.0.0", LISTEN_PORT), UnifiedProxyHandler)
