@@ -106,22 +106,19 @@ if [ "${TABLE_CNT:-0}" -lt 5 ]; then
   echo "Database import complete."
 fi
 rm -f /tmp/restored_pokemon.sql 2>/dev/null || true
-# [VN16_EVENTS] Ensure default server events (7-day login, Level-up gifts, First Charge 20k) are active
+# [VN19_EVENTS] Clean invalid empty-content rows & enable 7-day login (1), Level-up (109), Prime First Charge 20k (124) with content=NULL
 mysql --socket=/tmp/mysqld.sock -u root -pqweqwe pokemon -e "
+  DELETE FROM t_activities WHERE sid=1 AND (type=101 OR content='');
   INSERT INTO t_activities (sid, type, name, sort, p0, start, end, state, content, modify)
-  SELECT 1, 1, 'Dang Nhap 7 Ngay', 1, 0, '2026-01-01 00:00:00', '2030-12-31 23:59:59', 0, '', 0
+  SELECT 1, 1, 'Dang Nhap 7 Ngay', 1, 0, '2026-01-01 00:00:00', '2030-12-31 23:59:59', 0, NULL, 0
   FROM DUAL WHERE NOT EXISTS (SELECT 1 FROM t_activities WHERE sid=1 AND type=1);
   INSERT INTO t_activities (sid, type, name, sort, p0, start, end, state, content, modify)
-  SELECT 1, 109, 'Qua Thang Cap', 2, 0, '2026-01-01 00:00:00', '2030-12-31 23:59:59', 0, '', 0
+  SELECT 1, 109, 'Qua Thang Cap', 2, 0, '2026-01-01 00:00:00', '2030-12-31 23:59:59', 0, NULL, 0
   FROM DUAL WHERE NOT EXISTS (SELECT 1 FROM t_activities WHERE sid=1 AND type=109);
   INSERT INTO t_activities (sid, type, name, sort, p0, start, end, state, content, modify)
-  SELECT 1, 124, 'Nap Dau Chi Ton', 3, 0, '2026-01-01 00:00:00', '2030-12-31 23:59:59', 0, '', 0
+  SELECT 1, 124, 'Nap Dau Chi Ton', 3, 0, '2026-01-01 00:00:00', '2030-12-31 23:59:59', 0, NULL, 0
   FROM DUAL WHERE NOT EXISTS (SELECT 1 FROM t_activities WHERE sid=1 AND type=124);
-  INSERT INTO t_activities (sid, type, name, sort, p0, start, end, state, content, modify)
-  SELECT 1, 101, 'Qua Nap Dau', 4, 0, '2026-01-01 00:00:00', '2030-12-31 23:59:59', 0, '', 0
-  FROM DUAL WHERE NOT EXISTS (SELECT 1 FROM t_activities WHERE sid=1 AND type=101);
 " >/dev/null 2>&1 || true
-
 
 echo "=== [4/5] Compiling & Launching HeadlessServiceManager (zero WinForms/Xvfb, saves 120MB RAM) ==="
 export MONO_GC_PARAMS="nursery-size=1m,soft-heap-limit=180m"
