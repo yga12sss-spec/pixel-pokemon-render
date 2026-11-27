@@ -360,6 +360,26 @@ loadConfig();loadOrders();setInterval(loadOrders,4000);
 """
 
 
+_BACKEND_READY = False
+
+def is_backend_ready():
+    global _BACKEND_READY
+    if _BACKEND_READY:
+        return True
+    ready_file = os.environ.get("PKM_READY_FILE", "")
+    if ready_file and os.path.exists(ready_file):
+        _BACKEND_READY = True
+        return True
+    try:
+        for pt in (18000, 18001, 18002):
+            with socket.create_connection(("127.0.0.1", pt), timeout=0.5):
+                pass
+        _BACKEND_READY = True
+        return True
+    except Exception:
+        return False
+
+
 class UnifiedProxyHandler(http.server.BaseHTTPRequestHandler):
     protocol_version = "HTTP/1.1"
     timeout = 75
@@ -482,7 +502,20 @@ class UnifiedProxyHandler(http.server.BaseHTTPRequestHandler):
         qs = urllib.parse.parse_qs(parsed_url.query)
 
         if path == "/pay/ping":
-            self._send_json(200, {"status": 0, "ok": True, "ts": int(time.time())})
+            self._send_json(200, {"status": 0, "ok": True, "ready": is_backend_ready(), "ts": int(time.time())})
+            return True
+
+        if path == "/pay/diag" and (qs.get("key") or [""])[0] == SEPAY_SECRET:
+            import glob
+            ports = subprocess.run(["ss", "-lnt"], capture_output=True, text=True).stdout
+            procs = subprocess.run(["ps", "-eo", "pid,rss,cmd"], capture_output=True, text=True).stdout
+            logs = {}
+            for lf in sorted(glob.glob("/tmp/*.log")):
+                try:
+                    logs[os.path.basename(lf)] = open(lf, encoding="utf-8", errors="ignore").read()[-1200:]
+                except Exception:
+                    pass
+            self._send_json(200, {"ready": is_backend_ready(), "ports": ports, "procs": procs, "logs": logs})
             return True
 
         if path == "/pay/admin" and self.command == "GET":
@@ -663,8 +696,7 @@ class UnifiedProxyHandler(http.server.BaseHTTPRequestHandler):
         parsed = urllib.parse.urlparse(self.path)
         p = parsed.path
 
-        ready_file = os.environ.get("PKM_READY_FILE", "")
-        if ready_file and not os.path.exists(ready_file) and p != "/pay/ping":
+        if not is_backend_ready() and not p.startswith("/pay/"):
             boot_html = (
                 "<!DOCTYPE html><html lang='vi'><head><meta charset='utf-8'>"
                 "<meta name='viewport' content='width=device-width,initial-scale=1'>"
