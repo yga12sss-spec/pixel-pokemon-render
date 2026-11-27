@@ -178,6 +178,207 @@ def gm_send_mail(sid, pid, title, detail, items_str):
     return res
 
 
+def gm_send_notice(content, loop=2, duration=30):
+    session = "sepay-auto-session-pkm-2026"
+    now_t = time.time()
+    begin_str = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(now_t - 5))
+    end_str = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(now_t + 300))
+    res = {}
+    for attempt in range(2):
+        payload = urllib.parse.urlencode({
+            "sids": "1",
+            "beginTime": begin_str,
+            "endTime": end_str,
+            "content": content,
+            "loop": loop,
+            "duration": duration,
+            "type": 1000,
+            "session": session,
+        }).encode("utf-8")
+        req = urllib.request.Request("http://127.0.0.1:18002/notice/addNotice", data=payload, method="POST")
+        try:
+            with urllib.request.urlopen(req, timeout=8) as r:
+                res = json.loads(r.read().decode("utf-8"))
+            if res.get("status") == 0 and res.get("result"):
+                return res
+        except Exception:
+            pass
+        if attempt == 0:
+            ensure_gm_session()
+    return res
+
+
+DAILY_LOCK = threading.Lock()
+DAILY_TABLE_READY = False
+DAILY_GIFT_ITEMS = "2;2000|1;100000|13002;3|10013;5|12003;10"
+DAILY_GIFT_TITLE = "Quà Đăng Nhập Hằng Ngày"
+DAILY_GIFT_DETAIL = (
+    "Chào mừng bạn trở lại Pixel Pokemon! Hệ thống tặng bạn 2.000 Kim Cương cùng "
+    "10 Vạn Vàng, 3 Bóng Cao Cấp, 5 Thẻ EXP Đặc Cấp và 10 Mật Ong. Chúc bạn chơi game vui vẻ!"
+)
+
+
+def _vn_date_str(ts=None):
+    return time.strftime("%Y-%m-%d", time.gmtime(int(ts or time.time()) + 7 * 3600))
+
+
+def daily_ensure_table():
+    global DAILY_TABLE_READY
+    if DAILY_TABLE_READY:
+        return
+    sql = (
+        "CREATE TABLE IF NOT EXISTS t_daily_login_gift ("
+        "pid INT NOT NULL,"
+        "claim_date VARCHAR(16) NOT NULL,"
+        "claimed_at BIGINT NOT NULL DEFAULT 0,"
+        "PRIMARY KEY (pid, claim_date)"
+        ");"
+    )
+    rc, _ = _mysql_query(sql)
+    if rc == 0:
+        DAILY_TABLE_READY = True
+
+
+def daily_login_grant(pid, player_name=""):
+    pid = int(pid or 0)
+    if pid <= 0:
+        return {"status": -1, "message": "Invalid pid"}
+    today = _vn_date_str()
+    with DAILY_LOCK:
+        daily_ensure_table()
+        rc, out = _mysql_query(
+            f"SELECT 1 FROM t_daily_login_gift WHERE pid={pid} AND claim_date='{today}' LIMIT 1;"
+        )
+        if rc == 0 and out.strip():
+            return {"status": 0, "granted": False, "already_claimed": True, "date": today}
+        res = gm_send_mail(1, pid, DAILY_GIFT_TITLE, DAILY_GIFT_DETAIL, DAILY_GIFT_ITEMS)
+        if not (res.get("status") == 0 and res.get("result")):
+            return {"status": -1, "message": f"Mail error: {res}"}
+        now_ts = int(time.time())
+        _mysql_query(
+            f"INSERT IGNORE INTO t_daily_login_gift(pid, claim_date, claimed_at) VALUES ({pid}, '{today}', {now_ts});"
+        )
+    return {
+        "status": 0,
+        "granted": True,
+        "date": today,
+        "notice": (
+            "[#FFD700][LOA THÔNG BÁO] [#FFFFFF]Tặng quà đăng nhập hằng ngày: "
+            "[#00FFFF]2.000 Kim Cương + 10 Vạn Vàng + 3 Bóng Cao Cấp + 5 Thẻ EXP + 10 Mật Ong "
+            "[#FFFFFF]đã gửi vào [#00FF00]Hộp Thư[#FFFFFF]!"
+        ),
+    }
+
+
+MSHOP_LOCK = threading.Lock()
+MSHOP_TABLE_READY = False
+
+
+def mshop_ensure_table():
+    global MSHOP_TABLE_READY
+    if MSHOP_TABLE_READY:
+        return
+    sql = (
+        "CREATE TABLE IF NOT EXISTS t_magic_shop_buy ("
+        "pid INT NOT NULL,"
+        "item_id INT NOT NULL,"
+        "bought INT NOT NULL DEFAULT 0,"
+        "updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,"
+        "PRIMARY KEY (pid, item_id)"
+        ");"
+    )
+    rc, _ = _mysql_query(sql)
+    if rc == 0:
+        MSHOP_TABLE_READY = True
+
+
+def mshop_get_bought(pid):
+    pid = int(pid or 0)
+    if pid <= 0:
+        return {"status": 0, "bought": {}}
+    with MSHOP_LOCK:
+        mshop_ensure_table()
+        rc, out = _mysql_query(f"SELECT item_id, bought FROM t_magic_shop_buy WHERE pid={pid};")
+    bought = {}
+    if rc == 0 and out:
+        for line in out.splitlines():
+            parts = line.split("\t")
+            if len(parts) >= 2 and parts[0].isdigit():
+                bought[parts[0]] = int(parts[1] or 0)
+    return {"status": 0, "bought": bought}
+
+
+def mshop_record_buy(pid, item_id):
+    pid = int(pid or 0)
+    item_id = int(item_id or 0)
+    if pid <= 0 or item_id <= 0:
+        return {"status": -1}
+    with MSHOP_LOCK:
+        mshop_ensure_table()
+        _mysql_query(
+            f"INSERT INTO t_magic_shop_buy(pid, item_id, bought) VALUES ({pid}, {item_id}, 1) "
+            f"ON DUPLICATE KEY UPDATE bought = bought + 1;"
+        )
+    return {"status": 0}
+
+
+NOTICE_LOCK = threading.Lock()
+NOTICE_TABLE_READY = False
+
+
+def notice_ensure_table():
+    global NOTICE_TABLE_READY
+    if NOTICE_TABLE_READY:
+        return
+    sql = (
+        "CREATE TABLE IF NOT EXISTS t_custom_notices ("
+        "id INT AUTO_INCREMENT PRIMARY KEY,"
+        "content TEXT NOT NULL,"
+        "ts BIGINT NOT NULL DEFAULT 0"
+        ") CHARACTER SET utf8mb4 COLLATE utf8mb4_general_ci;"
+    )
+    rc, _ = _mysql_query(sql)
+    if rc == 0:
+        NOTICE_TABLE_READY = True
+
+
+def notice_add_broadcast(content):
+    content = str(content or "").strip()
+    if not content:
+        return {"status": -1, "message": "Nội dung thông báo trống!"}
+    safe_sql = content.replace("\\", "\\\\").replace("'", "\\'").replace("\n", " ").replace("\r", "")
+    now_ts = int(time.time())
+    with NOTICE_LOCK:
+        notice_ensure_table()
+        _mysql_query(f"INSERT INTO t_custom_notices(content, ts) VALUES ('{safe_sql}', {now_ts});")
+        _, out = _mysql_query("SELECT COALESCE(MAX(id), 0) FROM t_custom_notices;")
+        nid = int(out.strip() or 0) if out.strip().isdigit() else 0
+    try:
+        gm_send_notice(content, loop=2, duration=20)
+    except Exception:
+        pass
+    return {"status": 0, "id": nid}
+
+
+def notice_list_since(since_id=0):
+    since_id = int(since_id or 0)
+    with NOTICE_LOCK:
+        notice_ensure_table()
+        rc, out = _mysql_query(
+            f"SELECT id, ts, REPLACE(REPLACE(content, '\t', ' '), '\n', ' ') "
+            f"FROM t_custom_notices WHERE id > {since_id} ORDER BY id DESC LIMIT 5;"
+        )
+        _, max_out = _mysql_query("SELECT COALESCE(MAX(id), 0) FROM t_custom_notices;")
+    items = []
+    if rc == 0 and out:
+        for line in reversed(out.splitlines()):
+            parts = line.split("\t", 2)
+            if len(parts) == 3 and parts[0].isdigit():
+                items.append({"id": int(parts[0]), "ts": int(parts[1] or 0), "content": parts[2]})
+    latest = int(max_out.strip() or 0) if max_out.strip().isdigit() else since_id
+    return {"status": 0, "notices": items, "latest_id": latest}
+
+
 FC7_LOCK = threading.Lock()
 FC7_TABLE_READY = False
 FC7_CHOICES = {1243: "Raikou", 1244: "Entei", 1245: "Suicune"}
@@ -522,6 +723,14 @@ ADMIN_HTML = r"""<!DOCTYPE html>
     </div>
   </div>
   <div class="box">
+    <div style="font-weight:700;margin-bottom:8px;color:#fbbf24;">📢 Phát Loa Thông Báo Toàn Server (chạy ngang đầu màn hình + Chat Thế Giới):</div>
+    <div class="row">
+      <input id="bc_msg" type="text" placeholder="VD: Quà 2.000 Kim Cương hằng ngày đã phát qua Hộp Thư! Chúc anh em chơi vui vẻ!" style="flex:1;min-width:260px;">
+      <button class="btn-ok" onclick="sendBroadcast()">📢 Phát Loa Ngay</button>
+      <span id="bc_st" style="font-size:13px;color:#34d399;"></span>
+    </div>
+  </div>
+  <div class="box">
     <div class="row" style="justify-content:space-between;">
       <div style="font-weight:700;">3. Lịch sử giao dịch SePay & Đơn nạp:</div>
       <button class="btn-pri" onclick="loadOrders()">Làm mới</button>
@@ -542,6 +751,7 @@ async function copyGas(){const r=await fetch('/pay/code_gs');await navigator.cli
 async function loadOrders(){const r=await fetch('/pay/list');const data=await r.json();const tb=document.getElementById('tbody');tb.innerHTML='';for(const o of (data.orders||[])){const stCls='st-'+o.status;const stTxt=o.status==='pending'?'Chờ tiền về':(o.status==='approved'?'✅ Đã cộng':'Đã hủy');const act=o.status==='pending'?`<button class="btn-ok" onclick="act(${o.id},'approve')">Duyệt tay</button> <button class="btn-no" onclick="act(${o.id},'reject')">Hủy</button>`:'-';tb.innerHTML+=`<tr><td>${o.id}</td><td>${o.time}</td><td><b>${o.playerName}</b> (UID:${o.pid})</td><td>${o.goodsName}</td><td><b>${Number(o.vnd).toLocaleString('vi-VN')}đ</b></td><td>${o.note}</td><td class="${stCls}">${stTxt}</td><td>${act}</td></tr>`;}}
 async function act(id,type){const r=await fetch('/pay/'+type,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({id})});const j=await r.json();if(j.status!==0)alert(j.message||'Lỗi');loadOrders();}
 async function manualTopup(){const pid=Number(document.getElementById('m_pid').value);const gid=Number(document.getElementById('m_gid').value);const msg=document.getElementById('m_msg');if(!pid){msg.textContent='Nhập UID!';return;}const p=PACKS[gid]||[6,66];msg.textContent='Đang cộng...';const r=await fetch('/pay/manual',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({sid:1,pid,goodsid:gid,rmb:p[0],diamond:p[1]})});const j=await r.json();msg.textContent=j.status===0?'✅ Đã cộng thành công vào UID '+pid+'!':('Lỗi: '+(j.message||''));loadOrders();}
+async function sendBroadcast(){const el=document.getElementById('bc_msg');const st=document.getElementById('bc_st');const content=el.value.trim();if(!content){st.textContent='Nhập nội dung loa!';return;}st.textContent='Đang phát...';const r=await fetch('/pay/broadcast',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({content})});const j=await r.json();st.textContent=j.status===0?'✅ Đã phát loa toàn server!':('Lỗi: '+(j.message||''));if(j.status===0)el.value='';}
 loadConfig();loadOrders();setInterval(loadOrders,4000);
 </script>
 </body>
@@ -729,6 +939,43 @@ class UnifiedProxyHandler(http.server.BaseHTTPRequestHandler):
             try:
                 data = json.loads((body or b"{}").decode("utf-8"))
                 out = fc7_claim_day(data.get("pid", 0), data.get("day", 0), data.get("choice", 0))
+                self._send_json(200, out)
+            except Exception as e:
+                self._send_json(500, {"status": -1, "message": str(e)})
+            return True
+
+        if path == "/pay/daily_login_gift" and self.command == "POST":
+            try:
+                data = json.loads((body or b"{}").decode("utf-8"))
+                out = daily_login_grant(data.get("pid", 0), data.get("name", ""))
+                self._send_json(200, out)
+            except Exception as e:
+                self._send_json(500, {"status": -1, "message": str(e)})
+            return True
+
+        if path == "/pay/magic_shop_status" and self.command == "GET":
+            pid = int((qs.get("pid") or ["0"])[0])
+            self._send_json(200, mshop_get_bought(pid))
+            return True
+
+        if path == "/pay/magic_shop_buy" and self.command == "POST":
+            try:
+                data = json.loads((body or b"{}").decode("utf-8"))
+                out = mshop_record_buy(data.get("pid", 0), data.get("item_id", 0))
+                self._send_json(200, out)
+            except Exception as e:
+                self._send_json(500, {"status": -1, "message": str(e)})
+            return True
+
+        if path == "/pay/notices" and self.command == "GET":
+            since_id = int((qs.get("since") or ["0"])[0])
+            self._send_json(200, notice_list_since(since_id))
+            return True
+
+        if path == "/pay/broadcast" and self.command == "POST":
+            try:
+                data = json.loads((body or b"{}").decode("utf-8"))
+                out = notice_add_broadcast(data.get("content", ""))
                 self._send_json(200, out)
             except Exception as e:
                 self._send_json(500, {"status": -1, "message": str(e)})
