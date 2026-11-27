@@ -1,4 +1,5 @@
 #!/bin/bash
+# BUNDLE_VER=vn20
 set -e
 
 export LANG=C.UTF-8
