@@ -58,10 +58,17 @@ mariadbd \
   --character-set-server=utf8mb4 \
   --collation-server=utf8mb4_general_ci \
   --skip-character-set-client-handshake \
-  --innodb-buffer-pool-size=16M \
+  --innodb-buffer-pool-size=8M \
+  --innodb-log-buffer-size=1M \
+  --key-buffer-size=256K \
+  --aria-pagecache-buffer-size=512K \
+  --tmp-table-size=2M \
+  --max-heap-table-size=2M \
   --performance-schema=OFF \
-  --table-open-cache=64 \
-  --max-connections=25 \
+  --table-open-cache=32 \
+  --table-definition-cache=128 \
+  --thread-cache-size=4 \
+  --max-connections=20 \
   >/tmp/pkm/mariadbd.log 2>&1 &
 
 for i in $(seq 1 30); do
@@ -102,6 +109,7 @@ if [ "${TABLE_CNT:-0}" -lt 5 ]; then
 fi
 
 echo "=== [4/5] Compiling & Launching HeadlessServiceManager (zero WinForms/Xvfb, saves 120MB RAM) ==="
+export MONO_GC_PARAMS="nursery-size=1m,soft-heap-limit=180m"
 rm -f /tmp/lsc.log /tmp/*Service.log 2>/dev/null || true
 cd /app/pgame/Run
 mcs -r:EasyGame.Core.dll -r:LocalServiceContainer.exe -r:ServiceManage.Interface.dll -r:System.Xml.dll -r:System.Core.dll -out:HeadlessContainer.exe /app/HeadlessContainer.cs >>/tmp/lsc.log 2>&1
@@ -118,7 +126,5 @@ for i in $(seq 1 180); do
   sleep 1
 done
 
-echo "=== [5/5] Starting 5-minute Auto-Backup loop ==="
-python3 /app/backup_sync.py loop >/tmp/pkm/backup.log 2>&1 &
-
+echo "=== [5/5] Auto-Backup handled periodically by cloud_proxy (zero idle RAM overhead) ==="
 wait $PROXY_PID
