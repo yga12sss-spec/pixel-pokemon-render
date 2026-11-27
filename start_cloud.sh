@@ -40,36 +40,7 @@ if [ ! -d "/app/pgame/Run" ]; then
   tar -xzf /tmp/pgame_bundle.tar.gz -C /app
   rm -f /tmp/pgame_bundle.tar.gz
   ln -sfn client /app/pgame/Client
-  chmod +x /app/pgame/Run/*/run.sh
-  python3 -c '
-import re, os
-# 1. Bind LocalServiceContainer strictly to 127.0.0.1 so Render portdetectorv2 never probes port 15000!
-lcfg = "/app/pgame/Run/LocalServiceContainer.cfg"
-ls = open(lcfg, encoding="utf-8").read().replace("0.0.0.0", "127.0.0.1")
-open(lcfg, "w", encoding="utf-8").write(ls)
-
-# 2. Remove unused StaticResService to save 32MB RAM
-p = "/app/pgame/Run/ServiceConfig.xml"
-s = open(p, encoding="utf-8").read()
-s = re.sub(r"<e ServiceClass=\"StaticResService\"[\s\S]*?</e>", "", s)
-open(p, "w", encoding="utf-8").write(s)
-
-# 3. Light stagger for Mono services
-delays = {
-    "DataStorageService": 0,
-    "AgentService": 1,
-    "ManagementService": 2,
-    "AuthenticationService": 4,
-    "PokemonGameService": 6,
-}
-for svc, d in delays.items():
-    rp = f"/app/pgame/Run/{svc}/run.sh"
-    sl = f"sleep {d}\n" if d > 0 else ""
-    sh = f"#!/bin/sh\n{sl}exec mono \"{svc}.exe\" \"$@\" >> \"/tmp/{svc}.log\" 2>&1\n"
-    open(rp, "wb").write(sh.encode("utf-8"))
-    os.chmod(rp, 0o755)
-'
-  echo "Bundle extracted & protected against portdetectorv2."
+  echo "Bundle extracted."
 fi
 
 echo "=== [2/5] Starting MariaDB (512MB-tuned, non-root UID $(id -u)) ==="
@@ -130,10 +101,11 @@ if [ "${TABLE_CNT:-0}" -lt 5 ]; then
   echo "Database import complete."
 fi
 
-echo "=== [4/5] Launching Pokemon Mono Game Server (5 core services) ==="
+echo "=== [4/5] Compiling & Launching HeadlessServiceManager (zero WinForms/Xvfb, saves 120MB RAM) ==="
 rm -f /tmp/lsc.log /tmp/*Service.log 2>/dev/null || true
 cd /app/pgame/Run
-xvfb-run -a mono LocalServiceContainer.exe Pokemon >/tmp/lsc.log 2>&1 &
+mcs -r:EasyGame.Core.dll -r:LocalServiceContainer.exe -r:ServiceManage.Interface.dll -r:System.Xml.dll -r:System.Core.dll -out:HeadlessContainer.exe /app/HeadlessContainer.cs >>/tmp/lsc.log 2>&1
+mono HeadlessContainer.exe Pokemon >>/tmp/lsc.log 2>&1 &
 
 for i in $(seq 1 180); do
   if curl -sS -m 2 http://127.0.0.1:18000/login/servers >/dev/null 2>&1 && \
