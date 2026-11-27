@@ -136,7 +136,7 @@ def backup_once():
         if proc.returncode != 0 or len(proc.stdout) < 1000:
             print(f"[backup] mysqldump failed: rc={proc.returncode} err={proc.stderr[:200]}", flush=True)
             return False
-        gz = gzip.compress(proc.stdout, compresslevel=6)
+        gz = gzip.compress(proc.stdout, compresslevel=1)
         files = {"pokemon_latest.sql.gz": gz}
         for jf in ("pay_orders.json", "sepay_config.json", "sepay_processed.json"):
             fp = os.path.join(DATA_DIR, jf)

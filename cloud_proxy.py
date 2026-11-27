@@ -959,10 +959,12 @@ class UnifiedProxyHandler(http.server.BaseHTTPRequestHandler):
         fwd_headers["Connection"] = "close"
 
         last_err = None
-        for attempt in range(2):
+        is_notify = "/notify" in target_path
+        max_attempts = 1 if is_notify else 3
+        for attempt in range(max_attempts):
             conn = None
             try:
-                conn = http.client.HTTPConnection(target_host, target_port, timeout=70)
+                conn = http.client.HTTPConnection(target_host, target_port, timeout=25 if is_notify else 55)
                 conn.request(self.command, target_path, body=body, headers=fwd_headers)
                 resp = conn.getresponse()
                 data = resp.read()
@@ -986,8 +988,8 @@ class UnifiedProxyHandler(http.server.BaseHTTPRequestHandler):
                 return
             except Exception as e:
                 last_err = e
-                if attempt == 0 and "/notify" not in target_path:
-                    time.sleep(0.25)
+                if not is_notify and attempt < max_attempts - 1:
+                    time.sleep(0.3 * (attempt + 1))
                     continue
             finally:
                 if conn:
@@ -995,6 +997,20 @@ class UnifiedProxyHandler(http.server.BaseHTTPRequestHandler):
                         conn.close()
                     except Exception:
                         pass
+
+        # For /agent/notify long-poll timeout/drop, return 200 empty so client reconnects silently without disconnect popup!
+        if is_notify:
+            try:
+                self.send_response(200)
+                self.send_header("Content-Type", "text/plain; charset=utf-8")
+                self.send_header("Access-Control-Allow-Origin", "*")
+                self.send_header("Cache-Control", "no-store")
+                self.send_header("Connection", "close")
+                self.send_header("Content-Length", "0")
+                self.end_headers()
+            except Exception:
+                pass
+            return
 
         err_body = f"Proxy error: {last_err}".encode("utf-8", errors="ignore")
         try:
@@ -1023,12 +1039,12 @@ class ThreadedHTTPServer(socketserver.ThreadingMixIn, http.server.HTTPServer):
 
 
 def backup_periodic_loop():
-    time.sleep(90)
-    interval = int(os.environ.get("BACKUP_INTERVAL_SEC", "300"))
+    time.sleep(120)
+    interval = int(os.environ.get("BACKUP_INTERVAL_SEC", "600"))
     while True:
         try:
             if is_backend_ready():
-                subprocess.run(["python3", "/app/backup_sync.py", "once"], timeout=90)
+                subprocess.run(["nice", "-n", "19", "python3", "/app/backup_sync.py", "once"], timeout=120)
         except Exception as e:
             print(f"[backup] periodic err: {e}", flush=True)
         time.sleep(interval)
