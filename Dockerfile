@@ -27,9 +27,10 @@ WORKDIR /app
 
 COPY --chown=user:user cloud_proxy.py /app/cloud_proxy.py
 COPY --chown=user:user backup_sync.py /app/backup_sync.py
+COPY --chown=user:user HeadlessContainer.cs /app/HeadlessContainer.cs
 COPY --chown=user:user start_cloud.sh /app/start_cloud.sh
 
-RUN sed -i 's/\r$//' /app/start_cloud.sh /app/cloud_proxy.py /app/backup_sync.py && \
+RUN sed -i 's/\r$//' /app/start_cloud.sh /app/cloud_proxy.py /app/backup_sync.py /app/HeadlessContainer.cs && \
     chmod +x /app/start_cloud.sh
 
 USER user
