@@ -43,16 +43,24 @@ if [ ! -d "/app/pgame/Run" ]; then
   chmod +x /app/pgame/Run/*/run.sh
   python3 -c '
 import re, os
+# 1. Bind LocalServiceContainer strictly to 127.0.0.1 so Render portdetectorv2 never probes port 15000!
+lcfg = "/app/pgame/Run/LocalServiceContainer.cfg"
+ls = open(lcfg, encoding="utf-8").read().replace("0.0.0.0", "127.0.0.1")
+open(lcfg, "w", encoding="utf-8").write(ls)
+
+# 2. Remove unused StaticResService to save 32MB RAM
 p = "/app/pgame/Run/ServiceConfig.xml"
 s = open(p, encoding="utf-8").read()
 s = re.sub(r"<e ServiceClass=\"StaticResService\"[\s\S]*?</e>", "", s)
 open(p, "w", encoding="utf-8").write(s)
+
+# 3. Light stagger for Mono services
 delays = {
     "DataStorageService": 0,
-    "AgentService": 4,
-    "ManagementService": 8,
-    "PokemonGameService": 12,
-    "AuthenticationService": 20,
+    "AgentService": 1,
+    "ManagementService": 2,
+    "AuthenticationService": 4,
+    "PokemonGameService": 6,
 }
 for svc, d in delays.items():
     rp = f"/app/pgame/Run/{svc}/run.sh"
@@ -61,7 +69,7 @@ for svc, d in delays.items():
     open(rp, "wb").write(sh.encode("utf-8"))
     os.chmod(rp, 0o755)
 '
-  echo "Bundle extracted & staggered for 0.15 CPU / 512MB RAM."
+  echo "Bundle extracted & protected against portdetectorv2."
 fi
 
 echo "=== [2/5] Starting MariaDB (512MB-tuned, non-root UID $(id -u)) ==="
