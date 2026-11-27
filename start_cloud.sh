@@ -1,5 +1,5 @@
 #!/bin/bash
-# BUNDLE_VER=vn22
+# BUNDLE_VER=vn23
 set -e
 
 export LANG=C.UTF-8
@@ -127,6 +127,17 @@ rm -f /tmp/lsc.log /tmp/*Service.log 2>/dev/null || true
 cd /app/pgame/Run
 mcs -r:EasyGame.Core.dll -r:LocalServiceContainer.exe -r:ServiceManage.Interface.dll -r:System.Xml.dll -r:System.Core.dll -out:HeadlessContainer.exe /app/HeadlessContainer.cs >>/tmp/lsc.log 2>&1
 mono HeadlessContainer.exe Pokemon >>/tmp/lsc.log 2>&1 &
+
+# [AUTH_WATCHDOG] Auto-restart AuthenticationService once if port 18000 stalls on 0.1 vCPU
+(
+  sleep 32
+  if ! curl -sf --max-time 3 http://127.0.0.1:18000/login/servers >/dev/null 2>&1; then
+    echo "[watchdog] Port 18000 stalled on boot, restarting AuthenticationService..."
+    pkill -9 -f AuthenticationService.exe 2>/dev/null || true
+    sleep 2
+    (cd /app/pgame/Server/AuthenticationService && mono AuthenticationService.exe >/tmp/auth_restart.log 2>&1 &)
+  fi
+) &
 
 for i in $(seq 1 180); do
   if curl -sS -m 2 http://127.0.0.1:18000/login/servers >/dev/null 2>&1 && \
