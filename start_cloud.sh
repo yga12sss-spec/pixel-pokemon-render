@@ -109,7 +109,7 @@ if [ "${TABLE_CNT:-0}" -lt 5 ]; then
 fi
 
 echo "=== [4/5] Compiling & Launching HeadlessServiceManager (zero WinForms/Xvfb, saves 120MB RAM) ==="
-export MONO_GC_PARAMS="nursery-size=1m,soft-heap-limit=180m"
+export MONO_GC_PARAMS="nursery-size=512k,soft-heap-limit=120m"
 rm -f /tmp/lsc.log /tmp/*Service.log 2>/dev/null || true
 cd /app/pgame/Run
 mcs -r:EasyGame.Core.dll -r:LocalServiceContainer.exe -r:ServiceManage.Interface.dll -r:System.Xml.dll -r:System.Core.dll -out:HeadlessContainer.exe /app/HeadlessContainer.cs >>/tmp/lsc.log 2>&1
