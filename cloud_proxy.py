@@ -478,7 +478,7 @@ class UnifiedProxyHandler(http.server.BaseHTTPRequestHandler):
             self.send_response(200)
             self.send_header("Content-Type", ctype)
             self.send_header("ETag", etag)
-            if ext in (".html", ".htm"):
+            if ext in (".html", ".htm", ".json", ".js"):
                 self.send_header("Cache-Control", "no-cache")
             else:
                 self.send_header("Cache-Control", "public, max-age=3600")
@@ -749,6 +749,12 @@ class UnifiedProxyHandler(http.server.BaseHTTPRequestHandler):
             if "/gm" in ref and self._serve_file_from_root(GM_ROOT, p):
                 return
             if self._serve_file_from_root(CLIENT_ROOT, p):
+                return
+            if (
+                p.startswith(("/resource/", "/icon/", "/assets/", "/ui/", "/anim/", "/langs/", "/sound/", "/particle/", "/bones/", "/js/", "/css/"))
+                or os.path.splitext(p)[1].lower() in (".png", ".jpg", ".jpeg", ".gif", ".webp", ".json", ".js", ".css", ".mp3", ".wav", ".fnt", ".exml", ".ico")
+            ):
+                self._send_json(404, {"error": "Not Found", "path": p})
                 return
 
         target_host, target_port, target_path = self._route(self.path)
