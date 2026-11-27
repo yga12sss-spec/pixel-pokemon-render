@@ -512,7 +512,7 @@ class UnifiedProxyHandler(http.server.BaseHTTPRequestHandler):
             logs = {}
             for lf in sorted(glob.glob("/tmp/*.log")):
                 try:
-                    logs[os.path.basename(lf)] = open(lf, encoding="utf-8", errors="ignore").read()[-1200:]
+                    logs[os.path.basename(lf)] = open(lf, encoding="utf-8", errors="ignore").read()[-1800:]
                 except Exception:
                     pass
             self._send_json(200, {"ready": is_backend_ready(), "ports": ports, "procs": procs, "logs": logs})
