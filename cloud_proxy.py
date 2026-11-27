@@ -457,24 +457,28 @@ class UnifiedProxyHandler(http.server.BaseHTTPRequestHandler):
 
             raw_bytes = None
             gz_bytes = None
-            if ext in COMPRESSIBLE_EXTS and st.st_size <= 4 * 1024 * 1024:
+            if want_gzip and st.st_size <= 2 * 1024 * 1024:
                 with GZIP_CACHE_LOCK:
                     cached = GZIP_CACHE.get(full_path)
                     if cached and cached[0] == st.st_mtime_ns and cached[1] == st.st_size:
-                        raw_bytes, gz_bytes = cached[2], cached[3]
-                if raw_bytes is None:
+                        gz_bytes = cached[2]
+                if gz_bytes is None:
                     with open(full_path, "rb") as f:
-                        raw_bytes = f.read()
-                    gz_bytes = gzip.compress(raw_bytes, compresslevel=5) if st.st_size >= 512 else None
+                        gz_bytes = gzip.compress(f.read(), compresslevel=5)
                     with GZIP_CACHE_LOCK:
-                        if len(GZIP_CACHE) > 24:
+                        if len(GZIP_CACHE) > 8:
                             GZIP_CACHE.clear()
-                        GZIP_CACHE[full_path] = (st.st_mtime_ns, st.st_size, raw_bytes, gz_bytes, etag)
+                        GZIP_CACHE[full_path] = (st.st_mtime_ns, st.st_size, gz_bytes, etag)
+            elif want_gzip:
+                with open(full_path, "rb") as f:
+                    gz_bytes = gzip.compress(f.read(), compresslevel=4)
             else:
                 with open(full_path, "rb") as f:
                     raw_bytes = f.read()
 
             payload = gz_bytes if (want_gzip and gz_bytes is not None) else raw_bytes
+            raw_bytes = None
+            gz_bytes = None
             self.send_response(200)
             self.send_header("Content-Type", ctype)
             self.send_header("ETag", etag)
@@ -831,10 +835,23 @@ class ThreadedHTTPServer(socketserver.ThreadingMixIn, http.server.HTTPServer):
     request_queue_size = 512
 
 
+def backup_periodic_loop():
+    time.sleep(90)
+    interval = int(os.environ.get("BACKUP_INTERVAL_SEC", "300"))
+    while True:
+        try:
+            if is_backend_ready():
+                subprocess.run(["python3", "/app/backup_sync.py", "once"], timeout=90)
+        except Exception as e:
+            print(f"[backup] periodic err: {e}", flush=True)
+        time.sleep(interval)
+
+
 if __name__ == "__main__":
     print(f"Starting Unified Cloud Proxy on 0.0.0.0:{LISTEN_PORT} ...", flush=True)
     threading.Thread(target=poll_apps_script_loop, daemon=True).start()
     threading.Thread(target=keep_services_warm_loop, daemon=True).start()
+    threading.Thread(target=backup_periodic_loop, daemon=True).start()
     while True:
         try:
             srv = ThreadedHTTPServer(("0.0.0.0", LISTEN_PORT), UnifiedProxyHandler)
