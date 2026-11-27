@@ -153,7 +153,7 @@ def process_sepay_transaction(tx_id, pid, goodsid, amount_vnd, content, source="
             return {"status": 0, "duplicate": True}
 
     rmb, diamond = PACK_TABLE.get(int(goodsid), (6, 66))
-    expected_vnd = max(2000, int(rmb * VND_PER_YUAN))
+    expected_vnd = max(20000, int(rmb * VND_PER_YUAN))
 
     if int(amount_vnd) < expected_vnd:
         with ORDERS_LOCK:
@@ -315,7 +315,7 @@ ADMIN_HTML = r"""<!DOCTYPE html>
     <div class="row">
       <input id="m_pid" type="number" placeholder="UID (VD: 47)" style="width:120px;">
       <select id="m_gid">
-        <option value="1">Gói 1 - 6 Tệ (6.000đ)</option>
+        <option value="1">Gói 1 - 6 Tệ (20.000đ - Nạp Đầu)</option>
         <option value="2">Gói 2 - 30 Tệ (30.000đ)</option>
         <option value="3">Gói 3 - 50 Tệ (50.000đ)</option>
         <option value="4">Gói 4 - 100 Tệ (100.000đ)</option>
@@ -325,7 +325,7 @@ ADMIN_HTML = r"""<!DOCTYPE html>
         <option value="8">Gói 8 - 2000 Tệ (2.000.000đ)</option>
         <option value="9">Gói 9 - Thẻ Tháng (30.000đ)</option>
         <option value="10">Gói 10 - Thẻ Vĩnh Viễn (98.000đ)</option>
-        <option value="11">Gói 11 - Nạp 1 Tệ (2.000đ)</option>
+        <option value="11">Gói 11 - Gói Ưu Đãi (20.000đ)</option>
         <option value="13">Gói 13 - Quà 49 Tệ (49.000đ)</option>
       </select>
       <button class="btn-pri" onclick="manualTopup()">Cộng thẳng vào Nick</button>
@@ -633,7 +633,7 @@ class UnifiedProxyHandler(http.server.BaseHTTPRequestHandler):
                         "id": new_id, "ts": int(time.time()), "time": time.strftime("%Y-%m-%d %H:%M:%S"),
                         "sid": 1, "pid": pid, "playerName": f"UID:{pid} (Admin Buff)",
                         "goodsid": gid, "goodsName": f"Gói #{gid} ({rmb} Tệ)",
-                        "rmb": rmb, "diamond": dia, "vnd": rmb * VND_PER_YUAN,
+                        "rmb": rmb, "diamond": dia, "vnd": max(20000, rmb * VND_PER_YUAN),
                         "note": "MANUAL_ADMIN", "status": "approved",
                     })
                     save_orders(orders)
