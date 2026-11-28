@@ -379,6 +379,129 @@ def notice_list_since(since_id=0):
     return {"status": 0, "notices": items, "latest_id": latest}
 
 
+GC_LOCK = threading.Lock()
+GC_TABLE_READY = False
+DEFAULT_GIFTCODES = [
+    (
+        "TANTHU",
+        "Quà Giftcode TANTHU",
+        "Chúc mừng bạn đã nhập thành công Giftcode TANTHU! Tặng bạn 50.000 Kim Cương, 30 Vạn Vàng, 10 Bóng Cao Cấp, 10 Thẻ EXP Đặc Cấp, 20 Mật Ong và 20 Chuông Vạn Năng!",
+        "2;50000|1;300000|13002;10|10013;10|12003;20|10089;20",
+    ),
+]
+
+
+def gc_ensure_tables():
+    global GC_TABLE_READY
+    if GC_TABLE_READY:
+        return
+    sql1 = (
+        "CREATE TABLE IF NOT EXISTS t_giftcodes ("
+        "code VARCHAR(64) PRIMARY KEY,"
+        "title VARCHAR(128) NOT NULL,"
+        "detail TEXT NOT NULL,"
+        "items VARCHAR(512) NOT NULL,"
+        "active TINYINT NOT NULL DEFAULT 1,"
+        "created_at BIGINT NOT NULL DEFAULT 0"
+        ") CHARACTER SET utf8mb4 COLLATE utf8mb4_general_ci;"
+    )
+    sql2 = (
+        "CREATE TABLE IF NOT EXISTS t_giftcode_claims ("
+        "pid INT NOT NULL,"
+        "code VARCHAR(64) NOT NULL,"
+        "claimed_at BIGINT NOT NULL DEFAULT 0,"
+        "PRIMARY KEY (pid, code)"
+        ") CHARACTER SET utf8mb4 COLLATE utf8mb4_general_ci;"
+    )
+    rc1, _ = _mysql_query(sql1)
+    rc2, _ = _mysql_query(sql2)
+    if rc1 == 0 and rc2 == 0:
+        now_ts = int(time.time())
+        for code, title, detail, items in DEFAULT_GIFTCODES:
+            st = title.replace("\\", "\\\\").replace("'", "\\'")
+            sd = detail.replace("\\", "\\\\").replace("'", "\\'")
+            si = items.replace("\\", "\\\\").replace("'", "\\'")
+            _mysql_query(
+                f"INSERT IGNORE INTO t_giftcodes(code, title, detail, items, active, created_at) "
+                f"VALUES ('{code}', '{st}', '{sd}', '{si}', 1, {now_ts});"
+            )
+        GC_TABLE_READY = True
+
+
+def gc_redeem(pid, raw_code):
+    pid = int(pid or 0)
+    code = re.sub(r"[^A-Za-z0-9_-]", "", str(raw_code or "").strip()).upper()
+    if pid <= 0 or not code:
+        return {"status": -1, "message": "Vui lòng nhập mã Giftcode!"}
+    with GC_LOCK:
+        gc_ensure_tables()
+        rc, out = _mysql_query(
+            f"SELECT title, detail, items FROM t_giftcodes WHERE code='{code}' AND active=1 LIMIT 1;"
+        )
+        if rc != 0 or not out:
+            return {"status": 404, "message": "Not custom code"}
+        parts = out.splitlines()[0].split("\t")
+        if len(parts) < 3:
+            return {"status": 404, "message": "Not custom code"}
+        title, detail, items_str = parts[0], parts[1], parts[2]
+        rc_c, out_c = _mysql_query(
+            f"SELECT 1 FROM t_giftcode_claims WHERE pid={pid} AND code='{code}' LIMIT 1;"
+        )
+        if rc_c == 0 and out_c.strip():
+            return {"status": -2, "message": f"Bạn đã nhận mã Giftcode {code} này rồi!"}
+        res = gm_send_mail(1, pid, title, detail, items_str)
+        if not (res.get("status") == 0 and res.get("result")):
+            return {"status": -1, "message": f"Lỗi gửi thư quà: {res}"}
+        now_ts = int(time.time())
+        _mysql_query(
+            f"INSERT IGNORE INTO t_giftcode_claims(pid, code, claimed_at) VALUES ({pid}, '{code}', {now_ts});"
+        )
+    return {
+        "status": 0,
+        "code": code,
+        "message": f"Nhận Giftcode {code} thành công! Vui lòng mở Hòm Thư để nhận thưởng!",
+    }
+
+
+def gc_list_codes():
+    with GC_LOCK:
+        gc_ensure_tables()
+        rc, out = _mysql_query(
+            "SELECT g.code, g.title, g.items, g.active, "
+            "(SELECT COUNT(*) FROM t_giftcode_claims c WHERE c.code=g.code) "
+            "FROM t_giftcodes g ORDER BY g.created_at DESC;"
+        )
+    codes = []
+    if rc == 0 and out:
+        for line in out.splitlines():
+            p = line.split("\t")
+            if len(p) >= 5:
+                codes.append({
+                    "code": p[0], "title": p[1], "items": p[2],
+                    "active": int(p[3] or 0), "claims": int(p[4] or 0),
+                })
+    return {"status": 0, "codes": codes}
+
+
+def gc_create_code(raw_code, items_str, title="", detail=""):
+    code = re.sub(r"[^A-Za-z0-9_-]", "", str(raw_code or "").strip()).upper()
+    items_str = str(items_str or "").strip()
+    if not code or not items_str:
+        return {"status": -1, "message": "Vui lòng nhập Mã Code và Vật phẩm (VD: 2;50000|1;300000)!"}
+    if not re.match(r"^\d+;\d+(\|\d+;\d+)*$", items_str):
+        return {"status": -1, "message": "Định dạng vật phẩm sai! Đúng dạng: id;soluong|id;soluong (VD: 2;50000|1;300000)"}
+    title = (str(title or "").strip() or f"Quà Giftcode {code}").replace("\\", "\\\\").replace("'", "\\'")
+    detail = (str(detail or "").strip() or f"Chúc mừng bạn đã nhập thành công Giftcode {code}!").replace("\\", "\\\\").replace("'", "\\'")
+    now_ts = int(time.time())
+    with GC_LOCK:
+        gc_ensure_tables()
+        _mysql_query(
+            f"REPLACE INTO t_giftcodes(code, title, detail, items, active, created_at) "
+            f"VALUES ('{code}', '{title}', '{detail}', '{items_str}', 1, {now_ts});"
+        )
+    return {"status": 0, "code": code}
+
+
 FC7_LOCK = threading.Lock()
 FC7_TABLE_READY = False
 FC7_CHOICES = {1243: "Raikou", 1244: "Entei", 1245: "Suicune"}
@@ -731,6 +854,16 @@ ADMIN_HTML = r"""<!DOCTYPE html>
     </div>
   </div>
   <div class="box">
+    <div style="font-weight:700;margin-bottom:8px;color:#38bdf8;">🎁 Quản Lý Giftcode (mỗi người chơi dùng 1 lần, nhận qua Hộp Thư):</div>
+    <div class="row" style="margin-bottom:8px;">
+      <input id="gc_code" type="text" placeholder="Mã Code (VD: TANTHU)" style="width:150px;text-transform:uppercase;">
+      <input id="gc_items" type="text" placeholder="Vật phẩm: 2;50000|1;300000|13002;10 (2=KC, 1=Vàng)" style="flex:1;min-width:240px;">
+      <button class="btn-pri" onclick="createGiftcode()">Tạo / Cập Nhật Code</button>
+      <span id="gc_st" style="font-size:13px;color:#34d399;"></span>
+    </div>
+    <div id="gc_list" style="font-size:12px;color:#cbd5e1;line-height:1.6;"></div>
+  </div>
+  <div class="box">
     <div class="row" style="justify-content:space-between;">
       <div style="font-weight:700;">3. Lịch sử giao dịch SePay & Đơn nạp:</div>
       <button class="btn-pri" onclick="loadOrders()">Làm mới</button>
@@ -752,7 +885,9 @@ async function loadOrders(){const r=await fetch('/pay/list');const data=await r.
 async function act(id,type){const r=await fetch('/pay/'+type,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({id})});const j=await r.json();if(j.status!==0)alert(j.message||'Lỗi');loadOrders();}
 async function manualTopup(){const pid=Number(document.getElementById('m_pid').value);const gid=Number(document.getElementById('m_gid').value);const msg=document.getElementById('m_msg');if(!pid){msg.textContent='Nhập UID!';return;}const p=PACKS[gid]||[6,66];msg.textContent='Đang cộng...';const r=await fetch('/pay/manual',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({sid:1,pid,goodsid:gid,rmb:p[0],diamond:p[1]})});const j=await r.json();msg.textContent=j.status===0?'✅ Đã cộng thành công vào UID '+pid+'!':('Lỗi: '+(j.message||''));loadOrders();}
 async function sendBroadcast(){const el=document.getElementById('bc_msg');const st=document.getElementById('bc_st');const content=el.value.trim();if(!content){st.textContent='Nhập nội dung loa!';return;}st.textContent='Đang phát...';const r=await fetch('/pay/broadcast',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({content})});const j=await r.json();st.textContent=j.status===0?'✅ Đã phát loa toàn server!':('Lỗi: '+(j.message||''));if(j.status===0)el.value='';}
-loadConfig();loadOrders();setInterval(loadOrders,4000);
+async function loadGiftcodes(){const r=await fetch('/pay/giftcodes');const d=await r.json();const el=document.getElementById('gc_list');if(!el)return;el.innerHTML=(d.codes||[]).map(c=>`• <code>${c.code}</code> — Vật phẩm: <code>${c.items}</code> — Đã nhận: <b>${c.claims}</b> lượt`).join('<br>')||'Chưa có code nào';}
+async function createGiftcode(){const code=document.getElementById('gc_code').value.trim();const items=document.getElementById('gc_items').value.trim();const st=document.getElementById('gc_st');const r=await fetch('/pay/giftcodes',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({code,items})});const j=await r.json();st.textContent=j.status===0?'✅ Đã lưu code '+j.code+'!':('Lỗi: '+(j.message||''));if(j.status===0){document.getElementById('gc_code').value='';loadGiftcodes();}}
+loadConfig();loadOrders();loadGiftcodes();setInterval(loadOrders,4000);
 </script>
 </body>
 </html>
@@ -980,6 +1115,28 @@ class UnifiedProxyHandler(http.server.BaseHTTPRequestHandler):
             except Exception as e:
                 self._send_json(500, {"status": -1, "message": str(e)})
             return True
+
+        if path == "/pay/redeem_code" and self.command == "POST":
+            try:
+                data = json.loads((body or b"{}").decode("utf-8"))
+                out = gc_redeem(data.get("pid", 0), data.get("code", ""))
+                self._send_json(200, out)
+            except Exception as e:
+                self._send_json(500, {"status": -1, "message": str(e)})
+            return True
+
+        if path == "/pay/giftcodes":
+            if self.command == "GET":
+                self._send_json(200, gc_list_codes())
+                return True
+            if self.command == "POST":
+                try:
+                    data = json.loads((body or b"{}").decode("utf-8"))
+                    out = gc_create_code(data.get("code", ""), data.get("items", ""), data.get("title", ""), data.get("detail", ""))
+                    self._send_json(200, out)
+                except Exception as e:
+                    self._send_json(500, {"status": -1, "message": str(e)})
+                return True
 
         if path == "/pay/check_status" and self.command == "GET":
             pid = int((qs.get("pid") or ["0"])[0])
