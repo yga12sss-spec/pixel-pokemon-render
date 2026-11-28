@@ -120,6 +120,37 @@ namespace HeadlessLSC
                     }
                 }
             });
+
+            // Poll /tmp/pkm/flush_save to flush DataStorageService dirty cache to MariaDB before DB backup/shutdown
+            ThreadPool.QueueUserWorkItem(_ =>
+            {
+                string flag = "/tmp/pkm/flush_save";
+                while (true)
+                {
+                    try
+                    {
+                        if (File.Exists(flag))
+                        {
+                            try { File.Delete(flag); } catch { }
+                            foreach (var s in _services.Values)
+                            {
+                                if (s.ServiceClass == "DataStorageService" && s.InputStream != null)
+                                {
+                                    try
+                                    {
+                                        s.InputStream.WriteLine("save");
+                                        s.InputStream.Flush();
+                                        Console.WriteLine("[HeadlessLSC] Sent 'save' flush to DataStorageService");
+                                    }
+                                    catch { }
+                                }
+                            }
+                        }
+                    }
+                    catch { }
+                    Thread.Sleep(1000);
+                }
+            });
         }
 
         private void LaunchChild(HeadlessInstance inst)

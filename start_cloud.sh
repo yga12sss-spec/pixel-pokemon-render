@@ -1,5 +1,5 @@
 #!/bin/bash
-# BUNDLE_VER=vn28
+# BUNDLE_VER=vn29
 set -e
 
 export LANG=C.UTF-8
@@ -108,7 +108,9 @@ if [ "${TABLE_CNT:-0}" -lt 5 ]; then
 fi
 rm -f /tmp/restored_pokemon.sql 2>/dev/null || true
 # [VN19_EVENTS] Clean invalid empty-content rows & enable 7-day login (1), Level-up (109), Prime First Charge 20k (124) with content=NULL
+# [VN29_MAIL_SCHEMA] Expand t_player_mails.title & detail so Vietnamese mail descriptions never hit VARCHAR(128) overflow
 mysql --socket=/tmp/mysqld.sock -u root -pqweqwe pokemon -e "
+  ALTER TABLE t_player_mails MODIFY COLUMN title VARCHAR(255) DEFAULT NULL, MODIFY COLUMN detail TEXT DEFAULT NULL;
   DELETE FROM t_activities WHERE sid=1 AND (type=101 OR content='');
   INSERT INTO t_activities (sid, type, name, sort, p0, start, end, state, content, modify)
   SELECT 1, 1, 'Dang Nhap 7 Ngay', 1, 0, '2026-01-01 00:00:00', '2030-12-31 23:59:59', 0, NULL, 0

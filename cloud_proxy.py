@@ -158,13 +158,15 @@ def gm_login_and_recharge(sid, pid, goodsid, money, diamond):
 
 def gm_send_mail(sid, pid, title, detail, items_str):
     session = "sepay-auto-session-pkm-2026"
+    safe_title = str(title or "")[:60]
+    safe_detail = str(detail or "")[:120]
     res = {}
     for attempt in range(2):
         payload = urllib.parse.urlencode({
             "sid": sid,
             "pid": pid,
-            "title": title,
-            "detail": detail,
+            "title": safe_title,
+            "detail": safe_detail,
             "items": items_str,
             "session": session,
         }).encode("utf-8")
@@ -212,10 +214,7 @@ DAILY_LOCK = threading.Lock()
 DAILY_TABLE_READY = False
 DAILY_GIFT_ITEMS = "2;2000|1;100000|13002;3|10013;5|12003;10"
 DAILY_GIFT_TITLE = "Quà Đăng Nhập Hằng Ngày"
-DAILY_GIFT_DETAIL = (
-    "Chào mừng bạn trở lại Pixel Pokemon! Hệ thống tặng bạn 2.000 Kim Cương cùng "
-    "10 Vạn Vàng, 3 Bóng Cao Cấp, 5 Thẻ EXP Đặc Cấp và 10 Mật Ong. Chúc bạn chơi game vui vẻ!"
-)
+DAILY_GIFT_DETAIL = "Tặng bạn 2.000 Kim Cương, 10 Vạn Vàng, 3 Bóng Cao Cấp, 5 Thẻ EXP & 10 Mật Ong. Chúc chơi vui!"
 
 
 def _vn_date_str(ts=None):
@@ -385,7 +384,7 @@ DEFAULT_GIFTCODES = [
     (
         "TANTHU",
         "Quà Giftcode TANTHU",
-        "Chúc mừng bạn đã nhập thành công Giftcode TANTHU! Tặng bạn 50.000 Kim Cương, 30 Vạn Vàng, 10 Bóng Cao Cấp, 10 Thẻ EXP Đặc Cấp, 20 Mật Ong và 20 Chuông Vạn Năng!",
+        "Tặng 50.000 Kim Cương, 30 Vạn Vàng, 10 Bóng Cao Cấp, 10 Thẻ EXP, 20 Mật Ong & 20 Chuông Vạn Năng!",
         "2;50000|1;300000|13002;10|10013;10|12003;20|10089;20",
     ),
 ]
@@ -854,6 +853,13 @@ ADMIN_HTML = r"""<!DOCTYPE html>
     </div>
   </div>
   <div class="box">
+    <div style="font-weight:700;margin-bottom:8px;color:#34d399;">💾 Sao Lưu Dữ Liệu Người Chơi Lên Cloud (tự động mỗi 3 phút):</div>
+    <div class="row">
+      <button class="btn-ok" onclick="backupNow()">💾 Lưu DB Lên Cloud Ngay</button>
+      <span id="bk_st" style="font-size:13px;color:#38bdf8;"></span>
+    </div>
+  </div>
+  <div class="box">
     <div style="font-weight:700;margin-bottom:8px;color:#38bdf8;">🎁 Quản Lý Giftcode (mỗi người chơi dùng 1 lần, nhận qua Hộp Thư):</div>
     <div class="row" style="margin-bottom:8px;">
       <input id="gc_code" type="text" placeholder="Mã Code (VD: TANTHU)" style="width:150px;text-transform:uppercase;">
@@ -887,6 +893,7 @@ async function manualTopup(){const pid=Number(document.getElementById('m_pid').v
 async function sendBroadcast(){const el=document.getElementById('bc_msg');const st=document.getElementById('bc_st');const content=el.value.trim();if(!content){st.textContent='Nhập nội dung loa!';return;}st.textContent='Đang phát...';const r=await fetch('/pay/broadcast',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({content})});const j=await r.json();st.textContent=j.status===0?'✅ Đã phát loa toàn server!':('Lỗi: '+(j.message||''));if(j.status===0)el.value='';}
 async function loadGiftcodes(){const r=await fetch('/pay/giftcodes');const d=await r.json();const el=document.getElementById('gc_list');if(!el)return;el.innerHTML=(d.codes||[]).map(c=>`• <code>${c.code}</code> — Vật phẩm: <code>${c.items}</code> — Đã nhận: <b>${c.claims}</b> lượt`).join('<br>')||'Chưa có code nào';}
 async function createGiftcode(){const code=document.getElementById('gc_code').value.trim();const items=document.getElementById('gc_items').value.trim();const st=document.getElementById('gc_st');const r=await fetch('/pay/giftcodes',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({code,items})});const j=await r.json();st.textContent=j.status===0?'✅ Đã lưu code '+j.code+'!':('Lỗi: '+(j.message||''));if(j.status===0){document.getElementById('gc_code').value='';loadGiftcodes();}}
+async function backupNow(){const st=document.getElementById('bk_st');st.textContent='Đang lưu dữ liệu toàn server lên Cloud...';const r=await fetch('/pay/backup_now',{method:'POST'});const j=await r.json();st.textContent=j.status===0?'✅ Đã lưu DB lên Hugging Face thành công!':('❌ Lỗi lưu: '+(j.message||''));}
 loadConfig();loadOrders();loadGiftcodes();setInterval(loadOrders,4000);
 </script>
 </body>
@@ -1121,6 +1128,20 @@ class UnifiedProxyHandler(http.server.BaseHTTPRequestHandler):
                 data = json.loads((body or b"{}").decode("utf-8"))
                 out = gc_redeem(data.get("pid", 0), data.get("code", ""))
                 self._send_json(200, out)
+            except Exception as e:
+                self._send_json(500, {"status": -1, "message": str(e)})
+            return True
+
+        if path == "/pay/backup_now" and self.command == "POST":
+            try:
+                p = subprocess.run(
+                    ["python3", "/app/backup_sync.py", "once"],
+                    capture_output=True, text=True, timeout=90
+                )
+                if p.returncode == 0:
+                    self._send_json(200, {"status": 0, "message": (p.stdout or "").strip()[-300:]})
+                else:
+                    self._send_json(500, {"status": -1, "message": ((p.stdout or "") + " " + (p.stderr or "")).strip()[-300:]})
             except Exception as e:
                 self._send_json(500, {"status": -1, "message": str(e)})
             return True
@@ -1443,8 +1464,8 @@ class ThreadedHTTPServer(socketserver.ThreadingMixIn, http.server.HTTPServer):
 
 
 def backup_periodic_loop():
-    time.sleep(120)
-    interval = int(os.environ.get("BACKUP_INTERVAL_SEC", "600"))
+    time.sleep(45)
+    interval = int(os.environ.get("BACKUP_INTERVAL_SEC", "180"))
     while True:
         try:
             if is_backend_ready():
