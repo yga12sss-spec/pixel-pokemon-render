@@ -535,7 +535,16 @@ def players_summary():
                 sz = f.tell()
                 f.seek(max(0, sz - 32768))
                 tail = f.read()
-            online_sessions = set(re.findall(r"p=\d+\.([0-9a-f]{32})", tail))
+            now_utc = time.gmtime()
+            now_sec = now_utc.tm_hour * 3600 + now_utc.tm_min * 60 + now_utc.tm_sec
+            for line in tail.splitlines():
+                m_t = re.search(r"(\d\d):(\d\d):(\d\d)\]", line)
+                m_s = re.search(r"p=\d+\.([0-9a-f]{32})", line)
+                if m_t and m_s:
+                    sec = int(m_t.group(1)) * 3600 + int(m_t.group(2)) * 60 + int(m_t.group(3))
+                    diff = (now_sec - sec) % 86400
+                    if diff <= 90:
+                        online_sessions.add(m_s.group(1))
     except Exception:
         pass
     return {"status": 0, "total_accounts": total_acc, "online_count": len(online_sessions), "players": rows}
@@ -1525,7 +1534,7 @@ class ThreadedHTTPServer(socketserver.ThreadingMixIn, http.server.HTTPServer):
 
 def backup_periodic_loop():
     time.sleep(45)
-    interval = int(os.environ.get("BACKUP_INTERVAL_SEC", "180"))
+    interval = int(os.environ.get("BACKUP_INTERVAL_SEC", "240"))
     while True:
         try:
             if is_backend_ready():
