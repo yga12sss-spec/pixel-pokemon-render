@@ -1,5 +1,5 @@
 #!/bin/bash
-# BUNDLE_VER=vn30
+# BUNDLE_VER=vn31
 set -e
 
 export LANG=C.UTF-8
@@ -66,8 +66,8 @@ mariadbd \
   --performance-schema=OFF \
   --table-open-cache=32 \
   --table-definition-cache=128 \
-  --thread-cache-size=4 \
-  --max-connections=20 \
+  --thread-cache-size=8 \
+  --max-connections=45 \
   >/tmp/pkm/mariadbd.log 2>&1 &
 
 for i in $(seq 1 30); do

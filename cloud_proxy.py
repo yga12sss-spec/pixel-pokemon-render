@@ -754,6 +754,9 @@ def poll_apps_script_loop():
                     )
                     with urllib.request.urlopen(ack_req, timeout=12):
                         pass
+            else:
+                time.sleep(25)
+                continue
         except Exception:
             pass
         time.sleep(4)
