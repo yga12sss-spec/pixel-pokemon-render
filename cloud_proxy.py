@@ -501,6 +501,46 @@ def gc_create_code(raw_code, items_str, title="", detail=""):
     return {"status": 0, "code": code}
 
 
+def players_summary():
+    sql = (
+        "SELECT a.pid, a.account, COALESCE(p.name, ''), COALESCE(p.level, 0), "
+        "DATE_FORMAT(DATE_ADD(a.registerTime, INTERVAL 7 HOUR), '%Y-%m-%d %H:%i'), "
+        "COALESCE(DATE_FORMAT(DATE_ADD(a.lastLogin, INTERVAL 7 HOUR), '%Y-%m-%d %H:%i'), '') "
+        "FROM t_account a LEFT JOIN t_player p ON a.pid = p.pid "
+        "ORDER BY a.registerTime DESC LIMIT 20;"
+    )
+    rc, out = _mysql_query(sql)
+    rows = []
+    if rc == 0 and out:
+        for line in out.splitlines():
+            p = line.split("\t")
+            if len(p) >= 6:
+                rows.append({
+                    "pid": int(p[0] or 0),
+                    "account": p[1],
+                    "name": p[2],
+                    "level": int(p[3] or 0),
+                    "registerTime": p[4],
+                    "lastLogin": p[5],
+                })
+    _, cnt_out = _mysql_query("SELECT COUNT(*) FROM t_account;")
+    total_acc = int(cnt_out.strip() or 0) if cnt_out.strip().isdigit() else len(rows)
+
+    online_sessions = set()
+    try:
+        agent_log = "/tmp/AgentService.log"
+        if os.path.exists(agent_log):
+            with open(agent_log, "r", encoding="utf-8", errors="ignore") as f:
+                f.seek(0, os.SEEK_END)
+                sz = f.tell()
+                f.seek(max(0, sz - 32768))
+                tail = f.read()
+            online_sessions = set(re.findall(r"p=\d+\.([0-9a-f]{32})", tail))
+    except Exception:
+        pass
+    return {"status": 0, "total_accounts": total_acc, "online_count": len(online_sessions), "players": rows}
+
+
 FC7_LOCK = threading.Lock()
 FC7_TABLE_READY = False
 FC7_CHOICES = {1243: "Raikou", 1244: "Entei", 1245: "Suicune"}
@@ -874,6 +914,18 @@ ADMIN_HTML = r"""<!DOCTYPE html>
   </div>
   <div class="box">
     <div class="row" style="justify-content:space-between;">
+      <div style="font-weight:700;color:#fbbf24;">👥 Người Chơi Online &amp; Đăng Ký Mới: <span id="pl_stat" style="color:#34d399;font-size:13px;"></span></div>
+      <button class="btn-sec" onclick="loadPlayers()">Làm mới</button>
+    </div>
+    <div style="overflow-x:auto;">
+      <table>
+        <thead><tr><th>UID</th><th>Tài khoản</th><th>Tên nhân vật</th><th>Cấp</th><th>Đăng ký (VN)</th><th>Đăng nhập gần nhất (VN)</th></tr></thead>
+        <tbody id="pl_tbody"></tbody>
+      </table>
+    </div>
+  </div>
+  <div class="box">
+    <div class="row" style="justify-content:space-between;">
       <div style="font-weight:700;">3. Lịch sử giao dịch SePay & Đơn nạp:</div>
       <button class="btn-pri" onclick="loadOrders()">Làm mới</button>
     </div>
@@ -897,7 +949,8 @@ async function sendBroadcast(){const el=document.getElementById('bc_msg');const 
 async function loadGiftcodes(){const r=await fetch('/pay/giftcodes');const d=await r.json();const el=document.getElementById('gc_list');if(!el)return;el.innerHTML=(d.codes||[]).map(c=>`• <code>${c.code}</code> — Vật phẩm: <code>${c.items}</code> — Đã nhận: <b>${c.claims}</b> lượt`).join('<br>')||'Chưa có code nào';}
 async function createGiftcode(){const code=document.getElementById('gc_code').value.trim();const items=document.getElementById('gc_items').value.trim();const st=document.getElementById('gc_st');const r=await fetch('/pay/giftcodes',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({code,items})});const j=await r.json();st.textContent=j.status===0?'✅ Đã lưu code '+j.code+'!':('Lỗi: '+(j.message||''));if(j.status===0){document.getElementById('gc_code').value='';loadGiftcodes();}}
 async function backupNow(){const st=document.getElementById('bk_st');st.textContent='Đang lưu dữ liệu toàn server lên Cloud...';const r=await fetch('/pay/backup_now',{method:'POST'});const j=await r.json();st.textContent=j.status===0?'✅ Đã lưu DB lên Hugging Face thành công!':('❌ Lỗi lưu: '+(j.message||''));}
-loadConfig();loadOrders();loadGiftcodes();setInterval(loadOrders,4000);
+async function loadPlayers(){const r=await fetch('/pay/players');const d=await r.json();if(d.status!==0)return;document.getElementById('pl_stat').textContent='Online: '+d.online_count+' | Tổng TK: '+d.total_accounts;const tb=document.getElementById('pl_tbody');tb.innerHTML=(d.players||[]).map(p=>`<tr><td>${p.pid}</td><td><b>${p.account}</b></td><td>${p.name||'-'}</td><td>${p.level||'-'}</td><td>${p.registerTime||'-'}</td><td>${p.lastLogin||'-'}</td></tr>`).join('');}
+loadConfig();loadOrders();loadGiftcodes();loadPlayers();setInterval(loadOrders,4000);setInterval(loadPlayers,10000);
 </script>
 </body>
 </html>
@@ -1133,6 +1186,10 @@ class UnifiedProxyHandler(http.server.BaseHTTPRequestHandler):
                 self._send_json(200, out)
             except Exception as e:
                 self._send_json(500, {"status": -1, "message": str(e)})
+            return True
+
+        if path == "/pay/players" and self.command == "GET":
+            self._send_json(200, players_summary())
             return True
 
         if path == "/pay/backup_now" and self.command == "POST":
